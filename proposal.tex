@@ -1,0 +1,190 @@
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=0.75in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{microtype}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{xcolor}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=blue!70!black,
+    urlcolor=blue!70!black
+}
+
+\setlist{nosep, leftmargin=1.5em}
+
+\title{\textbf{\Large How Does an Uncued, Inferred Prior Enter the Decision Process?}\\[0.3em]
+\large A Drift Diffusion Model Study of Mouse Perceptual Choice}
+\author{\textbf{Parth Dhodapkar} (2024111009) \quad \textbf{Joshua Koilpillai} (2024101128)\\[0.2em]
+\normalsize Course: Introduction to Neural and Cognitive Modeling (INCM) \quad|\quad Topic: Evidence Accumulation (Q27)}
+\date{\vspace{-1.5em}\small October 2026}
+
+\begin{document}
+
+\maketitle
+
+\vspace{-1.5em}
+\hrule
+\vspace{0.8em}
+
+\section{Project Scope \& Research Questions}
+
+When deciding between sensory alternatives (e.g., reporting whether a faint visual grating appeared on the left or right of a display), the brain does not make a choice from an instantaneous sensory snapshot. Instead, it accumulates noisy sensory evidence over time until crossing an internal decision boundary. The Drift Diffusion Model (DDM; Ratcliff, 1978; Bogacz et al., 2006) provides the standard computational framework for this process, quantitatively capturing choice accuracy, response time (RT) distributions, and the speed-accuracy trade-off (SAT).
+
+In natural environments, decisions are strongly biased by prior expectations. In the DDM framework, prior expectations can enter the accumulation architecture through three distinct computational mechanisms:
+\begin{enumerate}
+    \item \textbf{Starting Point Bias ($z$):} Shifts the initial accumulator position toward the expected boundary before evidence begins, representing pre-evidence motor readiness or static decision preparation.
+    \item \textbf{Drift Bias ($v_b$):} Adds a constant offset to the evidence accumulation rate, representing an asymmetric top-down weighting or subjective filtering of sensory evidence.
+    \item \textbf{Dynamic Bias ($b(t)$):} Grows monotonically with elapsed decision time, producing an urgency-dependent reliance on the prior when ambiguous sensory evidence fails to terminate deliberation (Hanks et al., 2011).
+\end{enumerate}
+
+Recent perceptual decision-making literature indicates that the exact computational route depends critically on how the prior is generated:
+\begin{itemize}
+    \item \textbf{Explicit, cued priors} (e.g., instructing human subjects that a target is 80\% likely on the right) predominantly adjust the \textbf{starting point} $z$ (Mulder et al., 2012; Hellmann \& Forster, 2026).
+    \item \textbf{Implicit sequential biases} arising from the immediate previous choice (1-back choice history) shift the \textbf{drift rate} across both humans and rodents (Urai et al., 2019; Fernandez et al., 2025).
+\end{itemize}
+
+\subsection*{The Critical Gap: Uncued, Dynamically Inferred Priors}
+In ecological foraging, statistical regularities are \textbf{neither explicitly signaled nor reducible to 1-back motor persistence}. Instead, animals must continuously infer latent environmental states from ongoing reward feedback. In the standardized International Brain Laboratory (IBL, 2021) two-alternative forced-choice (2AFC) task, head-fixed mice experience blocks of 80/20 and 20/80 left/right target probability without any explicit cues. While Findling et al. (2023) demonstrated that mice successfully track this latent prior and encode it across widespread brain regions, they modeled choice probabilities using static logistic regression and GLM-HMMs without an evidence-accumulation model. Strikingly, the landmark cross-species DDM study by Fernandez, Fengler \& Urai (2025) modeled choice history in IBL mice but \textbf{deliberately excluded all sessions with biased probability blocks}. Consequently, the mechanistic routing of an uncued, inferred prior within the decision process remains completely unaddressed.
+
+\subsection*{Computational Modeling Protocol (Wilson \& Collins, 2019)}
+Multi-parameter diffusion models that combine sensory evidence, history biases, prior biases, and boundary dynamics are vulnerable to parameter collinearity and model mimicry. Following feedback, rather than introducing a superficial second dataset with divergent task dynamics, we ground this investigation in a \textbf{comprehensive parameter recovery and model recovery investigation} adhering to the protocol established by \textbf{Wilson \& Collins (2019)} (\textit{Ten simple rules for the computational modeling of behavioral data}, \textit{eLife}). We verify that our fitting pipeline uniquely identifies model parameters, rules out parameter crosstalk (e.g., $z$ vs. $v_b$ trade-offs), and establishes statistical power across typical mouse session trial counts before fitting empirical animal data.
+
+\subsection*{Project Structure \& Contributions}
+
+\noindent\textbf{Part A: Baseline Reproduction \& Wilson \& Collins Validation}
+\begin{enumerate}
+    \item Build a vectorized Euler--Maruyama DDM simulator in Python (\texttt{numpy}, \texttt{scipy}, \texttt{matplotlib}); reproduce canonical psychometric and chronometric curves and simulate the SAT by varying threshold $a$.
+    \item Conduct comprehensive parameter recovery across plausible parameter space ($k, a, t_0, z, v_b, v_h, b_{\max}, \tau_b$) at varying trial counts ($N = 200, 500, 1000, 2000$). Quantify recovery correlations ($r$), root-mean-square errors (RMSE), linear slopes ($\beta_1 \approx 1$), and the parameter error correlation matrix.
+    \item Perform model recovery across candidate models to construct confusion and inversion matrices under BIC, confirming absence of model mimicry.
+\end{enumerate}
+
+\vspace{0.4em}
+\noindent\textbf{Part B: Core Scientific Contributions}
+\begin{itemize}
+    \item \textbf{Contribution 1 (C1, Primary Novelty): Identifying the Route of the Inferred Prior.} Fit three competing DDM mechanisms to empirical IBL mouse choices and RT distributions during biased blocks, incorporating an explicit 1-back history drift term to dissociate block-level inferred priors from local choice repetition:
+    \begin{itemize}
+        \item \textbf{M1 (Starting Point Bias):} $x(0) = a \cdot z \cdot \text{prior} \implies$ bias is strongest for \textbf{fast} RTs, then \textbf{declines}.
+        \item \textbf{M2 (Drift Rate Bias):} $v(t) = v_{\text{sensory}} + v_b \cdot \text{prior} + v_h \cdot y_{t-1} \implies$ bias is \textbf{flat} across RT quantiles.
+        \item \textbf{M3 (Dynamic Elapsed Bias):} $x_{\text{eff}}(t) = x(t) + \text{prior} \cdot b_{\max} \frac{t}{t + \tau_b} \implies$ bias \textbf{increases} for slow trials.
+    \end{itemize}
+    Adjudicate between M1--M3 via $\Delta\text{BIC}$ and the non-parametric \textbf{Conditional Bias Function (CBF)} (White \& Poldrack, 2014; Wilson \& Collins Rule 6).
+    \item \textbf{Contribution 2 (C2, Secondary): Collapsing Bounds and Urgency on the Wheel Task.} Test whether decision thresholds collapse over time in mice turning a steering wheel. We compare fixed vs. Weibull-collapsing boundaries while controlling for across-trial drift variability ($s_v$) and starting-point variability ($s_z$), which can mimic urgency (Hawkins et al., 2015). We confirm that the winning prior mechanism in C1 is invariant to boundary dynamics.
+\end{itemize}
+
+\section{Novelty Statement}
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{3.2cm} >{\raggedright\arraybackslash}p{3.3cm} >{\raggedright\arraybackslash}p{3.5cm} >{\raggedright\arraybackslash}X}
+\toprule
+\textbf{Prior Literature} & \textbf{Paradigm \& Model} & \textbf{What It Left Open} & \textbf{Our Distinct Contribution} \\
+\midrule
+\textbf{Fernandez et al. (2025)} & DDM on IBL mice, humans; choice history $\to$ drift & Excluded all biased-block sessions from mouse data & First study to fit DDMs to the IBL \textbf{biased-block protocol}. \\
+\textbf{Findling et al. (2023)} & Inferred prior represented brain-wide in IBL mice & Static logistic regression; no evidence-accumulation model & Provides the \textbf{dynamic accumulation account} linking inferred priors to RT distributions. \\
+\textbf{Mulder et al. (2012); Hellmann \& Forster (2026)} & Cued priors shift starting point $z$ in humans & Priors were explicitly cued before each trial & Determines whether an \textbf{uncued, inferred} prior behaves like an explicit cue. \\
+\textbf{Hanks et al. (2011)} & Dynamic time-growing prior bias in macaque LIP & Neurophysiology in primates; never tested in rodents & First formal evaluation of \textbf{dynamic prior bias in rodents}. \\
+\textbf{Chakravarty et al. (2024)} & Collapsing bounds in rats and mice & Tested only discrete nose-poke tasks; wheel tasks untested & Evaluates fixed vs. collapsing bounds on a continuous \textbf{wheel task} with $s_v, s_z$ controls. \\
+\textbf{Wilson \& Collins (2019)} & Methodological framework for behavioral modeling & Parameter recovery often omitted in empirical DDM studies & \textbf{Comprehensive parameter and model recovery pipeline} prior to empirical fitting. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Methodologies \& Computational Validation}
+
+\subsection{Model Formulation}
+Accumulation of sensory evidence follows a one-dimensional diffusion process:
+\begin{equation}
+dx(t) = v(t)\,dt + \sigma\,dW(t), \quad x(0) = x_0, \quad \sigma = 1
+\end{equation}
+simulated via Euler--Maruyama integration ($\Delta t = 1\,\text{ms}$) with decision boundaries at $\pm a(t)$. Total response time is $\text{RT} = T_d + t_0$, where $T_d$ is decision time and $t_0$ is non-decision latency. Evidence drift rate $v(t)$ decomposes into sensory and choice history components:
+\begin{equation}
+v_{\text{sensory}} = k \cdot \text{sign}(c)\,|c|^\beta, \qquad v_{\text{history}} = v_h \cdot y_{t-1}, \quad y_{t-1} \in \{-1, +1\}
+\end{equation}
+where $c$ is signed visual contrast and $\text{prior} \in \{-1, 0, +1\}$ denotes 20\%, 50\%, and 80\% rightward probability blocks:
+\begin{align}
+\text{\textbf{M1 (Starting Point):}} \quad & x_0 = a \cdot z \cdot \text{prior}, \quad v(t) = v_{\text{sensory}} + v_{\text{history}} \\
+\text{\textbf{M2 (Drift Bias):}} \quad & x_0 = 0, \quad v(t) = v_{\text{sensory}} + v_{\text{history}} + v_b \cdot \text{prior} \\
+\text{\textbf{M3 (Dynamic Bias):}} \quad & x_0 = 0, \quad v(t) = v_{\text{sensory}} + v_{\text{history}}, \quad x_{\text{eff}}(t) = x(t) + \text{prior} \cdot b_{\max} \frac{t}{t + \tau_b}
+\end{align}
+with termination in M3 when $|x_{\text{eff}}(t)| \ge a$. For C2, we incorporate across-trial drift variability $v \sim \mathcal{N}(v_{\text{mean}}, s_v^2)$, starting point variability $x_0 \sim \mathcal{U}(-s_z a, s_z a)$, and evaluate the Weibull collapsing boundary:
+\begin{equation}
+a(t) = a \cdot \exp\left(-\left(\frac{t}{\lambda}\right)^\gamma\right)
+\end{equation}
+
+\subsection{Quantile Maximum Probability (QMP) Estimation}
+Because dynamic bias and collapsing bounds lack analytical closed-form likelihoods, models are fit via simulation-based Quantile Maximum Probability (QMP; Heathcote et al., 2002). For each contrast and choice alternative, RT distributions are partitioned into six bins by five quantiles $\{0.1, 0.3, 0.5, 0.7, 0.9\}$:
+\begin{equation}
+\ln L_{\text{QMP}} = \sum_{c} \sum_{y \in \{L, R\}} \sum_{i=1}^{6} N_{c, y, i} \ln P_{\text{model}}(c, y, i \mid \theta)
+\end{equation}
+where $N_{c, y, i}$ is the observed trial count and $P_{\text{model}}$ is simulated probability mass ($10{,}000$ trajectories per condition). Optimization uses Nelder--Mead with common random numbers (CRNs) fixed across iterations to ensure a deterministic loss surface.
+
+\subsection{Wilson \& Collins (2019) Parameter \& Model Recovery Pipeline}
+\begin{itemize}
+    \item \textbf{Parameter Recovery (Rule 4):} We sample 100 parameter vectors across realistic ranges ($k \in [1, 5]$, $a \in [0.5, 2.0]$, $t_0 \in [0.10, 0.35]\,\text{s}$, $z \in [-0.4, 0.4]$, $v_b \in [-1.5, 1.5]$, $v_h \in [-1.0, 1.0]$, $b_{\max} \in [0.5, 2.5]$, $\tau_b \in [0.1, 0.6]\,\text{s}$). For each vector, we generate synthetic datasets across sample sizes $N \in \{200, 500, 1000, 2000\}$ and refit them. We evaluate recovery correlation ($r > 0.8$), RMSE, linear slopes ($\beta_1 \approx 1$), and the recovery error correlation matrix $\text{Corr}(\Delta \theta_i, \Delta \theta_j)$ to demonstrate that $z$ and $v_b$ do not exhibit parameter cross-talk.
+    \item \textbf{Model Recovery (Rule 5):} We simulate 50 datasets per generative model (M1, M2, M3), fit all competing models, and construct the $3 \times 3$ confusion matrix $P(\text{fit } M_j \mid \text{gen } M_i)$ and posterior inversion matrix $P(\text{gen } M_i \mid \text{fit } M_j)$ via BIC to confirm $>85\%$ discriminability.
+    \item \textbf{Posterior Predictive Validation (Rule 6):} Best-fit empirical parameters will generate synthetic choices and RT distributions to confirm qualitative fidelity against empirical psychometric, chronometric, and Conditional Bias curves.
+\end{itemize}
+
+\section{Planned Datasets \& Evaluation Strategies}
+
+\begin{itemize}
+    \item \textbf{IBL Mouse Visual Decision Dataset (2021):} Freely available via the \texttt{one-api}. We analyze 10 trained mice on the biased protocol ($\sim 1{,}000$--$3{,}000$ trials/mouse across sessions). Variables: signed contrast ($0\%, 6.25\%, 12.5\%, 25\%, 50\%, 100\%$), block prior ($20/80, 50/50, 80/20$), 1-back choice $y_{t-1}$, current choice $y_t$, and $\text{RT} = t_{\text{wheel onset}} - t_{\text{stimulus onset}}$. Trials with $\text{RT} < 0.1\,\text{s}$ or $> 2.5\,\text{s}$ are excluded ($5.0\,\text{s}$ cutoff for C2 tail analysis).
+    \item \textbf{Evaluation Metrics:}
+    \begin{enumerate}
+        \item \textit{Recovery Quality:} True vs. recovered parameter scatter plots with unity lines, $r > 0.8$, and confusion matrix diagonal dominance.
+        \item \textit{Baseline Fits:} Empirical vs. simulated psychometric (sigmoid) and chronometric curves across contrasts.
+        \item \textit{Prior Routing (C1):} Individual and summed $\Delta\text{BIC}$ across 10 mice; empirical CBFs overlaid with M1 (declining), M2 (flat), and M3 (rising) theoretical predictions.
+        \item \textit{Urgency \& Invariance (C2):} $\Delta\text{BIC}$ for fixed vs. collapsing bounds (with $s_v, s_z$ controls), 0\%-contrast RT distribution tails, and verifying that C1 rankings remain invariant to boundary geometry.
+    \end{enumerate}
+\end{itemize}
+
+\section{Timeline \& Work Distribution (2 People, 4 Weeks)}
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabularx}{\textwidth}{c >{\raggedright\arraybackslash}p{4.8cm} >{\raggedright\arraybackslash}p{4.8cm} >{\raggedright\arraybackslash}X}
+\toprule
+\textbf{Week} & \textbf{Parth Dhodapkar} & \textbf{Joshua Koilpillai} & \textbf{Key Deliverables} \\
+\midrule
+\textbf{1} & Implement vectorized Euler--Maruyama simulator (M1--M3, collapsing bounds) & Download IBL biased dataset via ONE API; filter trials, extract RTs, block priors, and history & Operational simulator; clean and verified IBL dataset. \\
+\textbf{2} & Implement Wilson \& Collins Parameter Recovery pipeline ($N = 200\text{--}2000$); error correlations & Implement QMP Nelder--Mead fitting; run Model Recovery confusion matrix; baseline fits & Parameter recovery benchmarks; validated model confusion matrix. \\
+\textbf{3} & \textbf{C1:} Fit M1--M3 to 10 IBL mice; BIC analysis; compute Conditional Bias Functions & \textbf{C2:} Fit fixed vs. collapsing bounds with $s_v, s_z$ controls; test C1 boundary invariance & Prior routing adjudication (C1); boundary collapse results (C2). \\
+\textbf{4} & Posterior predictive checks (Rule 6); generate publication-grade figures & Draft report sections (Novelty, Recovery, Mechanistic Interpretation); code clean-up & Final project report, figures, and reproducible code repository. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\noindent\textit{Contingency Plan:} C1 and the Wilson \& Collins parameter recovery pipeline are the primary protected deliverables. If collapsing bounds (C2) encounter optimization bottlenecks, C2 will be reported as an exploratory robustness subsection.
+
+\section*{Key References}
+\small
+\begin{enumerate}
+    \item \textbf{Bogacz, R., et al.} (2006). The physics of optimal decision making. \textit{Psychol Rev}, 113(4), 700--765.
+    \item \textbf{Chakravarty, S., et al.} (2024). A cross-species framework for investigating perceptual evidence accumulation. \textit{bioRxiv}, 10.1101/2024.04.17.589945.
+    \item \textbf{Fernandez, K., Fengler, A., \& Urai, A. E.} (2025). Choice history biases evidence accumulation. \textit{bioRxiv}, 10.1101/2025.08.22.671879.
+    \item \textbf{Findling, C., et al.} (2023). Brain-wide representations of prior information in mouse decision-making. \textit{bioRxiv}, 10.1101/2023.07.04.547684.
+    \item \textbf{Hanks, T. D., et al.} (2011). Elapsed decision time affects the weighting of prior probability. \textit{J Neurosci}, 31(17), 6339--6352.
+    \item \textbf{Hawkins, G. E., et al.} (2015). Revisiting evidence for collapsing boundaries. \textit{J Neurosci}, 35(6), 2476--2484.
+    \item \textbf{Heathcote, A., et al.} (2002). Quantile maximum likelihood estimation of RT distributions. \textit{Psychon Bull Rev}, 9(2), 394--401.
+    \item \textbf{Hellmann, S., \& Forster, C.} (2026). Two paths to bias. \textit{Comput Brain Behav}, 10.1007/s42113-026-00331-6.
+    \item \textbf{International Brain Laboratory.} (2021). Standardized measurement of decision-making in mice. \textit{eLife}, 10, e63711.
+    \item \textbf{Mulder, M. J., et al.} (2012). Bias in the brain: Diffusion analysis of prior probability. \textit{J Neurosci}, 32(7), 2335--2343.
+    \item \textbf{Ratcliff, R.} (1978). A theory of memory retrieval. \textit{Psychol Rev}, 85(2), 59--108.
+    \item \textbf{Ratcliff, R., \& McKoon, G.} (2008). The diffusion decision model. \textit{Neural Comput}, 20(4), 873--922.
+    \item \textbf{Urai, A. E., et al.} (2019). Choice history biases subsequent evidence accumulation. \textit{eLife}, 8, e46331.
+    \item \textbf{White, C. N., \& Poldrack, R. A.} (2014). Decomposing bias in simple decisions. \textit{J Exp Psychol Learn Mem Cogn}, 40(2), 385--398.
+    \item \textbf{Wilson, R. C., \& Collins, A. G.} (2019). Ten simple rules for the computational modeling of behavioral data. \textit{eLife}, 8, e49547.
+\end{enumerate}
+
+\end{document}
