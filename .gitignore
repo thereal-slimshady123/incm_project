@@ -1,2 +1,7 @@
 proposal.tex
 proposal.md
+__pycache__/
+*.pyc
+*.nbi
+*.nbc
+.pytest_cache/

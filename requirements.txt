@@ -1,0 +1,7 @@
+numpy>=2.0
+scipy>=1.13
+pandas>=2.2
+matplotlib>=3.8
+joblib>=1.4
+numba>=0.60
+pytest>=8.0

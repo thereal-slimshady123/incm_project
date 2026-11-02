@@ -61,6 +61,27 @@ def sample_random_parameters(
     return params
 
 
+def summarize_recovery(df_results: pd.DataFrame, r_threshold: float = 0.8) -> pd.DataFrame:
+    """
+    Per-parameter recovery metrics for each trial count: Pearson r, RMSE, linear slope
+    of recovered on true, and whether r clears the plan's r > 0.8 criterion.
+    """
+    rows = []
+    param_names = [c[len("true_"):] for c in df_results.columns if c.startswith("true_")]
+    for n_trials, sub in df_results.groupby("n_trials"):
+        for p in param_names:
+            true_vals = sub[f"true_{p}"].to_numpy()
+            fit_vals = sub[f"fit_{p}"].to_numpy()
+            r = float(np.corrcoef(true_vals, fit_vals)[0, 1])
+            slope = float(np.polyfit(true_vals, fit_vals, 1)[0])
+            rmse = float(np.sqrt(np.mean((fit_vals - true_vals) ** 2)))
+            rows.append({
+                "n_trials": n_trials, "param": p, "r": r, "rmse": rmse, "slope": slope,
+                "passes_r": r > r_threshold,
+            })
+    return pd.DataFrame(rows)
+
+
 def _run_single_recovery_step(
     sim_idx: int,
     true_params: Dict[str, float],
@@ -105,7 +126,7 @@ def run_parameter_recovery(
     n_iterations: int = 100,
     trial_counts: List[int] = (1000,),
     n_jobs: int = -1,
-    maxiter: int = 120,
+    maxiter: int = 400,
     n_sim_per_cond: int = 300,
     output_dir: str = "results/recovery",
     seed: int = 42,
@@ -163,6 +184,12 @@ def run_parameter_recovery(
     csv_path = os.path.join(output_dir, f"param_recovery_{model_type}.csv")
     df_results.to_csv(csv_path, index=False)
     print(f"Saved parameter recovery data to: {csv_path}")
+
+    summary = summarize_recovery(df_results)
+    summary_path = os.path.join(output_dir, f"param_recovery_{model_type}_summary.csv")
+    summary.to_csv(summary_path, index=False)
+    print(summary.to_string(index=False, float_format=lambda v: f"{v:.3f}"))
+    print(f"Saved recovery metrics to: {summary_path}")
 
     # Generate plots for each trial count
     for n_trials in trial_counts:

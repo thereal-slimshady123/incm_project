@@ -48,6 +48,7 @@ def _run_single_model_recovery_step(
 
     # 2. Fit all competing models
     bic_scores = {}
+    converged = {}
     for fit_m in MODELS:
         fit_res = fit_ddm(
             trials_df=sim_df,
@@ -57,6 +58,7 @@ def _run_single_model_recovery_step(
             seed=seed + 500,
         )
         bic_scores[fit_m] = fit_res["bic"]
+        converged[fit_m] = fit_res["success"]
 
     # Select winning model via minimum BIC
     best_fit_model = min(bic_scores, key=bic_scores.get)
@@ -71,6 +73,11 @@ def _run_single_model_recovery_step(
         "delta_bic_M2_M1": bic_scores["M2"] - bic_scores["M1"],
         "delta_bic_M3_M2": bic_scores["M3"] - bic_scores["M2"],
     }
+    for m in MODELS:
+        record[f"success_{m}"] = converged[m]
+    # Generating parameters, so misclassified datasets can be inspected
+    for p, val in true_params.items():
+        record[f"true_{p}"] = val
     return record
 
 
@@ -78,7 +85,7 @@ def run_model_recovery(
     n_datasets_per_model: int = 50,
     n_trials: int = 1000,
     n_jobs: int = -1,
-    maxiter: int = 120,
+    maxiter: int = 400,
     n_sim_per_cond: int = 300,
     output_dir: str = "results/recovery",
     seed: int = 101,
@@ -144,6 +151,12 @@ def run_model_recovery(
         i = model_to_idx[row["true_model"]]
         j = model_to_idx[row["winning_model"]]
         confusion_counts[i, j] += 1
+
+    # Diagonal of P(Fitted | True): the plan requires > 85% for every generating model
+    recovery_rates = confusion_counts.diagonal() / confusion_counts.sum(axis=1)
+    for m, rate in zip(MODELS, recovery_rates):
+        print(f"  P(fit={m} | true={m}) = {rate:.2%}")
+    print(f"  Overall accuracy = {confusion_counts.trace() / confusion_counts.sum():.2%}")
 
     # Plot Confusion and Inversion matrices
     fig_path = os.path.join(output_dir, "model_recovery_confusion_inversion.png")

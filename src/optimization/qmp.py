@@ -9,6 +9,7 @@ and BIC for model adjudication.
 from typing import Dict, List, Tuple, Any, Optional
 import numpy as np
 import pandas as pd
+from scipy.special import ndtr
 
 
 class QMPDataset:
@@ -22,6 +23,7 @@ class QMPDataset:
         trials_df: pd.DataFrame,
         quantiles: Tuple[float, ...] = (0.1, 0.3, 0.5, 0.7, 0.9),
         min_trials_per_choice: int = 4,
+        group_cols: Tuple[str, ...] = ("contrast", "prior"),
     ):
         """
         Parameters
@@ -32,10 +34,14 @@ class QMPDataset:
             Quantile cutoff probabilities (default 0.1, 0.3, 0.5, 0.7, 0.9).
         min_trials_per_choice : int
             Minimum trials to compute quantiles; fallback to uniform if fewer.
+        group_cols : tuple of str
+            Columns defining a stimulus condition. Add 'prev_choice' when fitting
+            the 1-back history weight v_h, so the likelihood depends on it.
         """
         self.quantiles = np.array(quantiles)
         self.n_bins = len(quantiles) + 1
         self.min_trials = min_trials_per_choice
+        self.group_cols = list(group_cols)
         self.total_trials = len(trials_df)
 
         # Build condition tables
@@ -44,21 +50,22 @@ class QMPDataset:
 
     def _prepare_conditions(self, df: pd.DataFrame):
         """
-        Group trials by (contrast, prior) and compute empirical quantile bin edges.
+        Group trials by condition (group_cols) and compute empirical quantile bin edges.
         """
-        grouped = df.groupby(["contrast", "prior"], observed=False)
+        grouped = df.groupby(self.group_cols, observed=False)
 
-        for (c, p), group in grouped:
+        for key, group in grouped:
             n_cond = len(group)
             if n_cond == 0:
                 continue
 
             cond_dict: Dict[str, Any] = {
-                "contrast": float(c),
-                "prior": float(p),
+                "key": tuple(float(v) for v in key),
                 "n_trials": n_cond,
                 "choices": {},
             }
+            for col, val in zip(self.group_cols, cond_dict["key"]):
+                cond_dict[col] = val
 
             for choice_val in (-1, 1):
                 sub = group[group["choice"] == choice_val]
@@ -125,17 +132,16 @@ def compute_qmp_nll(
     total_nll = 0.0
     total_g2 = 0.0
 
-    # Group simulated trials by (contrast, prior)
-    sim_grouped = simulated_df.groupby(["contrast", "prior"], observed=False)
+    # Group simulated trials by the same condition columns as the target data
+    sim_grouped = simulated_df.groupby(qmp_data.group_cols, observed=False)
+    sim_keys = {tuple(float(v) for v in k): k for k in sim_grouped.groups}
 
     for cond in qmp_data.conditions:
-        c = cond["contrast"]
-        p = cond["prior"]
         n_obs_cond = cond["n_trials"]
 
         # Retrieve simulated group
-        key = (c, p)
-        if key in sim_grouped.groups:
+        key = sim_keys.get(cond["key"])
+        if key is not None:
             sim_sub = sim_grouped.get_group(key)
             n_sim_cond = len(sim_sub)
         else:
@@ -179,6 +185,85 @@ def compute_qmp_nll(
                 )
 
     return float(total_nll), float(total_g2)
+
+
+def compute_qmp_nll_blocks(
+    sim_choices: np.ndarray,
+    sim_rts: np.ndarray,
+    qmp_data: QMPDataset,
+    n_sim_per_cond: int,
+    eps: float = 1e-5,
+    bandwidth: Optional[float] = None,
+) -> float:
+    """
+    Fast QMP negative log-likelihood for simulations laid out in condition blocks.
+
+    Equivalent to compute_qmp_nll when simulated trial j belongs to condition
+    j // n_sim_per_cond, in the order of qmp_data.conditions (the layout built by
+    DDMFitter). Avoids a pandas groupby on every objective evaluation.
+
+    bandwidth : float, optional
+        If given, each simulated RT is spread over the bins with a Gaussian kernel of
+        this width (seconds) instead of being counted in exactly one bin. Under CRN a
+        hard count is a step function of the parameters (nothing changes until an RT
+        crosses a bin edge), which stalls Nelder-Mead on flat steps; the kernel makes
+        the objective continuous. Keep it small relative to the bin widths.
+    """
+    if bandwidth:
+        return _qmp_nll_blocks_smoothed(sim_choices, sim_rts, qmp_data, n_sim_per_cond, eps, bandwidth)
+
+    total_nll = 0.0
+    for i, cond in enumerate(qmp_data.conditions):
+        block = slice(i * n_sim_per_cond, (i + 1) * n_sim_per_cond)
+        block_choices = sim_choices[block]
+        block_rts = sim_rts[block]
+
+        for choice_val in (-1, 1):
+            target_info = cond["choices"][choice_val]
+            if target_info["n_choice"] == 0:
+                continue
+
+            rts = block_rts[block_choices == choice_val]
+            # Bin index per simulated RT; edges are [0, q1..q5, inf] so bins are 1..6
+            bins = np.searchsorted(target_info["bin_edges"], rts, side="right") - 1
+            sim_counts = np.bincount(bins, minlength=qmp_data.n_bins)[: qmp_data.n_bins]
+            pred_prob = np.maximum(sim_counts / float(n_sim_per_cond), eps)
+            total_nll -= np.sum(target_info["observed_counts"] * np.log(pred_prob))
+
+    return float(total_nll)
+
+
+def _qmp_nll_blocks_smoothed(
+    sim_choices: np.ndarray,
+    sim_rts: np.ndarray,
+    qmp_data: QMPDataset,
+    n_sim_per_cond: int,
+    eps: float,
+    bandwidth: float,
+) -> float:
+    """Kernel-smoothed bin probabilities: P(bin k) = mean_j [Phi((e_k+1 - rt_j)/h) - Phi((e_k - rt_j)/h)]."""
+    total_nll = 0.0
+    for i, cond in enumerate(qmp_data.conditions):
+        block = slice(i * n_sim_per_cond, (i + 1) * n_sim_per_cond)
+        block_choices = sim_choices[block]
+        block_rts = sim_rts[block]
+
+        for choice_val in (-1, 1):
+            target_info = cond["choices"][choice_val]
+            if target_info["n_choice"] == 0:
+                continue
+
+            rts = block_rts[block_choices == choice_val]
+            if len(rts) == 0:
+                pred_prob = np.full(qmp_data.n_bins, eps)
+            else:
+                # CDF of every simulated RT at every bin edge; edges are [0, q1..q5, inf]
+                cdf = ndtr((target_info["bin_edges"][None, :] - rts[:, None]) / bandwidth)
+                bin_mass = np.diff(cdf, axis=1).sum(axis=0)
+                pred_prob = np.maximum(bin_mass / float(n_sim_per_cond), eps)
+            total_nll -= np.sum(target_info["observed_counts"] * np.log(pred_prob))
+
+    return float(total_nll)
 
 
 def compute_bic(nll: float, n_params: int, n_trials: int) -> float:

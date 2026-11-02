@@ -16,6 +16,10 @@ import numpy as np
 import pandas as pd
 
 from .boundaries import get_boundary_function
+from ._kernel import HAVE_NUMBA
+
+if HAVE_NUMBA:
+    from ._kernel import simulate_kernel
 
 
 class DDMSimulator:
@@ -29,6 +33,7 @@ class DDMSimulator:
         dt: float = 0.001,
         t_max: float = 2.5,
         sigma: float = 1.0,
+        backend: Optional[str] = None,
     ):
         """
         Parameters
@@ -39,12 +44,21 @@ class DDMSimulator:
             Maximum decision time in seconds (default 2.5 s).
         sigma : float
             Diffusion noise scale (fixed to 1.0 for identifiability; Bogacz et al., 2006).
+        backend : str, optional
+            'numba' (compiled per-trial loop) or 'numpy' (vectorized fallback).
+            Defaults to 'numba' when numba is installed.
         """
         self.dt = dt
         self.t_max = t_max
         self.sigma = sigma
+        if backend is None:
+            backend = "numba" if HAVE_NUMBA else "numpy"
+        if backend == "numba" and not HAVE_NUMBA:
+            raise ImportError("backend='numba' requested but numba is not installed")
+        self.backend = backend
         self.n_steps = int(np.ceil(t_max / dt))
-        self.time_grid = np.linspace(0, t_max, self.n_steps)
+        # Time at the start of each Euler step (exact spacing dt)
+        self.time_grid = np.arange(self.n_steps) * dt
 
     def simulate(
         self,
@@ -56,6 +70,7 @@ class DDMSimulator:
         bound_type: str = "fixed",
         subject_id: str = "sim_agent",
         rng: Optional[np.random.Generator] = None,
+        stream_ids: Optional[np.ndarray] = None,
     ) -> pd.DataFrame:
         """
         Simulate a batch of trials.
@@ -84,13 +99,25 @@ class DDMSimulator:
         prev_choices : np.ndarray, optional
             1D array of previous choices (-1 for Left, +1 for Right, 0 for neutral/start).
         model_type : str
-            'M1' (Starting Point), 'M2' (Drift Bias), or 'M3' (Dynamic Bias).
+            'M1' (Starting Point), 'M2' (Drift Bias), 'M3' (Dynamic Bias), or
+            'JOINT' (starting point + drift bias, for z vs v_b trade-off tests).
         bound_type : str
             'fixed' or 'weibull'.
         subject_id : str
             Identifier for generated trials.
         rng : np.random.Generator, optional
             Numpy random generator for reproducibility / CRN.
+        stream_ids : np.ndarray, optional
+            Noise stream index per trial. Trials sharing a stream receive identical
+            noise and variability draws (used to chain choice history exactly).
+            Defaults to one stream per trial.
+
+        Notes
+        -----
+        Each trial's noise sequence is fixed by the seed and its stream id, regardless
+        of parameters (numba: private per-stream generator; numpy: noise drawn for every
+        stream at every step). This keeps Common Random Numbers valid across objective
+        evaluations.
 
         Returns
         -------
@@ -109,6 +136,12 @@ class DDMSimulator:
 
         if rng is None:
             rng = np.random.default_rng()
+
+        if stream_ids is None:
+            stream_ids = np.arange(n_trials)
+        else:
+            stream_ids = np.asarray(stream_ids, dtype=np.int64)
+        n_streams = int(stream_ids.max()) + 1 if n_trials > 0 else 0
 
         # Extract parameters with safe defaults
         a = float(params.get("a", 1.0))
@@ -133,29 +166,16 @@ class DDMSimulator:
         drift_rate = v_sensory + v_h * prev_choices
 
         model_key = model_type.upper()
-        if model_key == "M2":
+        if model_key in ("M2", "JOINT"):
             drift_rate = drift_rate + v_b * priors
 
-        # Trial-to-trial drift variability s_v: normal(0, s_v)
-        if s_v > 1e-6:
-            drift_rate = drift_rate + rng.normal(0.0, s_v, size=n_trials)
-
         # Starting point calculation
-        if model_key == "M1":
+        if model_key in ("M1", "JOINT"):
             # Starting point shifted by prior: x0 = a * z * prior
             # where z in [-1, 1] scales starting position relative to boundary a
             mean_x0 = a * np.clip(z, -0.95, 0.95) * priors
         else:
             mean_x0 = np.zeros(n_trials, dtype=np.float64)
-
-        # Trial-to-trial starting point variability s_z: uniform(-s_z*a/2, +s_z*a/2)
-        if s_z > 1e-6:
-            half_range = 0.5 * s_z * a
-            x0 = mean_x0 + rng.uniform(-half_range, half_range, size=n_trials)
-            # Clip so initial starting point is strictly within initial boundaries (-0.95*a, 0.95*a)
-            x0 = np.clip(x0, -0.95 * a, 0.95 * a)
-        else:
-            x0 = np.clip(mean_x0, -0.95 * a, 0.95 * a)
 
         # Boundary function
         bound_fn = get_boundary_function(bound_type)
@@ -163,15 +183,62 @@ class DDMSimulator:
             upper_bounds = bound_fn(self.time_grid, a=a, lam=lam, gamma=gamma)
         else:
             upper_bounds = bound_fn(self.time_grid, a=a)
-        lower_bounds = -upper_bounds
 
         # Precompute dynamic bias factor if M3: prior * b_max * t / (t + tau_b)
-        is_m3 = (model_key == "M3") and (b_max > 1e-6)
-        if is_m3:
-            # Time-dependent dynamic prior drift: grows with elapsed decision time t
-            # Hanks et al. (2011): uncertain/slow trials increasingly rely on the prior
-            t_over_tau = self.time_grid / (self.time_grid + np.maximum(tau_b, 1e-4))
-            dynamic_factors = b_max * t_over_tau  # (n_steps,)
+        # Time-dependent dynamic prior drift: grows with elapsed decision time t
+        # Hanks et al. (2011): uncertain/slow trials increasingly rely on the prior
+        if model_key == "M3" and b_max > 1e-6:
+            dynamic_factors = b_max * self.time_grid / (self.time_grid + np.maximum(tau_b, 1e-4))
+        else:
+            dynamic_factors = np.zeros(self.n_steps, dtype=np.float64)
+
+        if self.backend == "numba":
+            choices = np.zeros(n_trials, dtype=np.int8)
+            decision_time = np.empty(n_trials, dtype=np.float64)
+            simulate_kernel(
+                np.ascontiguousarray(drift_rate), mean_x0, priors, stream_ids,
+                int(rng.integers(0, 2**63 - 1)), s_v, s_z * a, 0.95 * a,
+                self.dt, self.sigma, self.t_max, upper_bounds, dynamic_factors,
+                choices, decision_time,
+            )
+        else:
+            choices, decision_time = self._simulate_numpy(
+                drift_rate, mean_x0, priors, stream_ids, n_streams, s_v, s_z, a,
+                upper_bounds, dynamic_factors, rng,
+            )
+
+        # Total Reaction Time (RT) = decision time + non-decision time t0
+        rt = decision_time + t0
+
+        df = pd.DataFrame({
+            "subject_id": subject_id,
+            "trial_idx": np.arange(n_trials, dtype=np.int32),
+            "contrast": contrasts,
+            "prior": priors,
+            "prev_choice": prev_choices.astype(np.int8),
+            "choice": choices,
+            "rt": rt,
+        })
+        return df
+
+    def _simulate_numpy(
+        self, drift_rate, mean_x0, priors, stream_ids, n_streams, s_v, s_z, a,
+        upper_bounds, dynamic_factors, rng,
+    ):
+        """Pure-NumPy fallback, vectorized across trials (used when numba is unavailable)."""
+        n_trials = len(drift_rate)
+        lower_bounds = -upper_bounds
+
+        # Variability draws are always taken (parameter-independent RNG consumption for CRN)
+        eta_v = rng.standard_normal(n_streams)[stream_ids]
+        eta_z = rng.uniform(-0.5, 0.5, size=n_streams)[stream_ids]
+
+        # Trial-to-trial drift variability s_v: normal(0, s_v)
+        drift_rate = drift_rate + s_v * eta_v
+
+        # Trial-to-trial starting point variability s_z: uniform(-s_z*a/2, +s_z*a/2)
+        # Clip so initial starting point is strictly within initial boundaries (-0.95*a, 0.95*a)
+        x0 = np.clip(mean_x0 + s_z * a * eta_z, -0.95 * a, 0.95 * a)
 
         # Simulation state
         x = x0.copy()
@@ -191,15 +258,12 @@ class DDMSimulator:
             upper_b = upper_bounds[s]
             lower_b = lower_bounds[s]
 
-            # Generate Gaussian increment for active trials
-            n_active = len(active_indices)
-            noise = rng.normal(0.0, std_noise, size=n_active)
+            # Draw increments for all streams, then pick those of active trials (CRN-stable)
+            step_noise = rng.standard_normal(n_streams)
+            noise = std_noise * step_noise[stream_ids[active_indices]]
 
-            # Determine instantaneous drift rate
-            current_drift = drift_rate[active_indices]
-            if is_m3:
-                # Add time-dependent dynamic bias drift offset
-                current_drift = current_drift + priors[active_indices] * dynamic_factors[s]
+            # Determine instantaneous drift rate (plus M3 time-dependent dynamic bias)
+            current_drift = drift_rate[active_indices] + priors[active_indices] * dynamic_factors[s]
 
             # Update accumulated evidence
             x[active_indices] += current_drift * self.dt + noise
@@ -216,7 +280,8 @@ class DDMSimulator:
                 crossed_choices = np.where(hit_upper[crossed], 1, -1)
 
                 choices[crossed_idx] = crossed_choices
-                decision_time[crossed_idx] = t
+                # Crossing happens at the end of this step
+                decision_time[crossed_idx] = t + self.dt
 
                 # Remove crossed trials from active pool
                 active_indices = active_indices[~crossed]
@@ -231,19 +296,7 @@ class DDMSimulator:
             final_sign[final_sign == 0] = rng.choice([-1, 1], size=np.sum(final_sign == 0))
             choices[undecided] = final_sign.astype(np.int8)
 
-        # Total Reaction Time (RT) = decision time + non-decision time t0
-        rt = decision_time + t0
-
-        df = pd.DataFrame({
-            "subject_id": subject_id,
-            "trial_idx": np.arange(n_trials, dtype=np.int32),
-            "contrast": contrasts,
-            "prior": priors,
-            "prev_choice": prev_choices.astype(np.int8),
-            "choice": choices,
-            "rt": rt,
-        })
-        return df
+        return choices, decision_time
 
 
 def simulate_ddm(
@@ -293,11 +346,15 @@ def simulate_ddm(
         contrasts = np.array(sampled_contrasts)
         priors = priors_full
 
-    if prev_choices is None:
-        # Initial dummy history; in sequential simulation this can be chained
-        prev_choices = np.zeros(len(contrasts), dtype=int)
-
     simulator = DDMSimulator(dt=dt, t_max=t_max)
+
+    if prev_choices is None:
+        # Chain 1-back history: prev_choice[t] is the simulated choice on trial t-1
+        return _simulate_chained(
+            simulator, params, model_type, np.asarray(contrasts, dtype=np.float64),
+            np.asarray(priors, dtype=np.float64), bound_type, subject_id, rng,
+        )
+
     return simulator.simulate(
         params=params,
         contrasts=contrasts,
@@ -308,3 +365,61 @@ def simulate_ddm(
         subject_id=subject_id,
         rng=rng,
     )
+
+
+def _simulate_chained(
+    simulator: DDMSimulator,
+    params: Dict[str, float],
+    model_type: str,
+    contrasts: np.ndarray,
+    priors: np.ndarray,
+    bound_type: str,
+    subject_id: str,
+    rng: np.random.Generator,
+) -> pd.DataFrame:
+    """
+    Simulate a session in which prev_choice is the agent's own previous choice.
+
+    Each trial t >= 1 is simulated twice in one vectorized pass, once with
+    prev_choice = -1 and once with +1, sharing the same noise stream. Walking the
+    chain then picks the copy matching the choice actually made on trial t-1,
+    which is exactly equivalent to sequential trial-by-trial simulation.
+    """
+    n_trials = len(contrasts)
+    rest = np.arange(1, n_trials)
+    trial_of_row = np.concatenate(([0], rest, rest))
+    prev_of_row = np.concatenate(([0.0], -np.ones(n_trials - 1), np.ones(n_trials - 1)))
+
+    sim = simulator.simulate(
+        params=params,
+        contrasts=contrasts[trial_of_row],
+        priors=priors[trial_of_row],
+        prev_choices=prev_of_row,
+        model_type=model_type,
+        bound_type=bound_type,
+        subject_id=subject_id,
+        rng=rng,
+        stream_ids=trial_of_row,
+    )
+    sim_choice = sim["choice"].to_numpy()
+    sim_rt = sim["rt"].to_numpy()
+
+    choices = np.empty(n_trials, dtype=np.int8)
+    rts = np.empty(n_trials, dtype=np.float64)
+    prev = np.zeros(n_trials, dtype=np.int8)
+    choices[0], rts[0] = sim_choice[0], sim_rt[0]
+    for t in range(1, n_trials):
+        prev[t] = choices[t - 1]
+        # Row t holds the prev=-1 copy, row t + (n_trials - 1) the prev=+1 copy
+        row = t if prev[t] < 0 else t + n_trials - 1
+        choices[t], rts[t] = sim_choice[row], sim_rt[row]
+
+    return pd.DataFrame({
+        "subject_id": subject_id,
+        "trial_idx": np.arange(n_trials, dtype=np.int32),
+        "contrast": contrasts,
+        "prior": priors,
+        "prev_choice": prev,
+        "choice": choices,
+        "rt": rts,
+    })
