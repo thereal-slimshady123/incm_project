@@ -5,3 +5,8 @@ __pycache__/
 *.nbi
 *.nbc
 .pytest_cache/
+
+# Track B: raw IBL downloads (re-created by run_track_b.py)
+data/raw/
+.venv/
+.ipynb_checkpoints/

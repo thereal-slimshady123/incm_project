@@ -75,6 +75,43 @@ python run_track_a.py --full-model-recovery --n-datasets 50
 
 ---
 
+## Quickstart & Commands (Track B - Joshua Koilpillai)
+
+### 0. Environment
+`ONE-api` is all that is needed to read IBL trial tables (`ibllib` is not required):
+```bash
+python3 -m venv ~/.venvs/incm && source ~/.venvs/incm/bin/activate
+pip install -r requirements.txt
+```
+
+### 1. Build the cleaned 10-mouse IBL dataset
+Connects to the public IBL Alyx server (no registration; shared public credentials), downloads
+the trial tables of all standard `biasedChoiceWorld` training sessions into `data/raw/ONE/`
+(git-ignored, ~170 MB), selects 10 mice and writes `data/processed/`:
+```bash
+python run_track_b.py --all          # ~40 min the first time (~2,700 small files); resumable
+python run_track_b.py --process      # rebuild processed files from the cached downloads only
+python run_track_b.py --test         # pytest suite (includes the data-contract tests)
+```
+
+Selection rule (deterministic): standard IBL biased training sessions (project
+`ibl_neuropixel_brainwide_01`, trials table available); a session qualifies with >= 400 trials,
+both block types, and >= 80% accuracy on easy trials (|contrast| >= 0.25); a mouse qualifies with
+>= 5 qualifying sessions; mice are ranked by total valid trials with at most 2 per lab.
+
+Outputs in `data/processed/` (all conform to the §3.1 schema):
+- `cohort_rt2p5.{parquet,csv}` / `cohort_rt5p0.{parquet,csv}` — all 10 mice (RT in [0.1, 2.5] s for C1; [0.1, 5.0] s for C2)
+- `rt_2p5/<mouse>.{parquet,csv}`, `rt_5p0/<mouse>.{parquet,csv}` — one file per mouse
+- `cohort_extended.{parquet,csv}` — 5.0 s cohort plus session id/date, lab, `rt_response`, feedback and `rt_in_2p5` flag
+- `summary_stats.csv`, `mice_selection.csv`, `session_manifest.csv` — statistics, mouse ranking, included sessions
+
+Conventions: `prior = +1` is a right-biased block (P(left stimulus) = 0.2), `choice = +1` is a
+Right response, `rt = firstMovement - stimOn`, `prev_choice` is the true 1-back choice (0 at
+session start and after a no-go). The unbiased opening trials of each session (P(left) = 0.5)
+are dropped. `rt_response = response_times - stimOn` is kept in the extended file for sensitivity checks.
+
+---
+
 ## Interface Contract (§3 in `plan.md`)
 
 ### Trial DataFrame Schema

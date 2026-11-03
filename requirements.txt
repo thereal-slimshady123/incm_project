@@ -5,3 +5,10 @@ matplotlib>=3.8
 joblib>=1.4
 numba>=0.60
 pytest>=8.0
+# Track B: IBL data access and storage (ibllib is not required)
+ONE-api>=2.9
+pyarrow>=14.0
+# Notebooks (Week 2)
+jupyter>=1.0
+nbformat>=5.9
+nbconvert>=7.0
