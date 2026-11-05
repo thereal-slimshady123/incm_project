@@ -6,13 +6,20 @@ Course: Introduction to Neural and Cognitive Modeling (INCM)
 Usage:
     python run_track_b.py --all                 # list -> download + QC -> select -> process
     python run_track_b.py --qc                  # list candidate sessions, download all, compute QC
-    python run_track_b.py --select              # select the 10 mice from cached QC
+    python run_track_b.py --select              # select the 10 mice from cached QC (keeps an existing cohort)
+    python run_track_b.py --refresh-qc          # recompute session QC from the local cache (offline)
     python run_track_b.py --process             # build data/processed/ for the selected mice
+    python run_track_b.py --empirical           # execute the Week 2 empirical baseline notebook
     python run_track_b.py --test                # run pytest suite
+
+Add --reselect to rebuild the cohort ranking from scratch instead of keeping the cohort already
+stored in data/processed/mice_selection.csv, and --rt-source first_movement for the alternative
+RT definition (default: response time, see src/data/preprocess.py).
 """
 
 import argparse
 import os
+import shutil
 import sys
 import time
 
@@ -23,10 +30,13 @@ from src.data.ibl_loader import (
     get_one,
     list_candidate_sessions,
     load_selected_sessions,
+    refresh_qc_from_cache,
     select_mice,
 )
 from src.data.preprocess import (
     CONTRACT_COLUMNS,
+    DEFAULT_RT_SOURCE,
+    RT_SOURCES,
     RT_MAX_EXTENDED,
     RT_MAX_STANDARD,
     build_subject_table,
@@ -43,8 +53,38 @@ def _paths(data_dir: str) -> dict:
         "qc": os.path.join(data_dir, "raw", "session_qc.csv"),
         "candidates": os.path.join(data_dir, "raw", "candidate_sessions.csv"),
         "mice": os.path.join(data_dir, "processed", "mice_selection.csv"),
+        # small, version-controlled copies so a fresh clone can re-select without re-downloading
+        "qc_tracked": os.path.join(data_dir, "processed", "session_qc.csv"),
+        "candidates_tracked": os.path.join(data_dir, "processed", "candidate_sessions.csv"),
         "manifest": os.path.join(data_dir, "processed", "session_manifest.csv"),
     }
+
+
+def _read_cached(p: dict, key: str) -> pd.DataFrame:
+    """Read the raw QC / candidate table, falling back to the tracked copy in data/processed/."""
+    path = p[key] if os.path.exists(p[key]) else p[key + "_tracked"]
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{p[key]} not found; run `python run_track_b.py --qc` first")
+    return pd.read_csv(path)
+
+
+def _save_tracked_copies(p: dict) -> None:
+    os.makedirs(p["processed"], exist_ok=True)
+    for key in ("qc", "candidates"):
+        if os.path.exists(p[key]):
+            shutil.copyfile(p[key], p[key + "_tracked"])
+
+
+def step_refresh_qc(data_dir: str, cache_dir: str) -> pd.DataFrame:
+    """Recompute session QC from the cached trial tables (offline) and refresh the tracked copy."""
+    p = _paths(data_dir)
+    cand = _read_cached(p, "candidates")
+    if not os.path.exists(p["qc"]):
+        os.makedirs(p["raw"], exist_ok=True)
+        _read_cached(p, "qc").to_csv(p["qc"], index=False)
+    qc = refresh_qc_from_cache(cand, cache_dir, qc_path=p["qc"])
+    _save_tracked_copies(p)
+    return qc
 
 
 def step_qc(data_dir: str, cache_dir: str, n_workers: int) -> pd.DataFrame:
@@ -65,27 +105,44 @@ def step_qc(data_dir: str, cache_dir: str, n_workers: int) -> pd.DataFrame:
     print("\n[Step 2/4] Downloading trial tables and computing session QC...")
     qc = evaluate_sessions(one, cand, qc_path=p["qc"], n_workers=n_workers)
     print(f"  -> status counts: {qc['status'].value_counts().to_dict()}")
+    _save_tracked_copies(p)
     return qc
 
 
-def step_select(data_dir: str, n_mice: int):
+def step_select(data_dir: str, n_mice: int, reselect: bool = False):
+    """
+    Rank qualifying mice and pick the cohort. An existing cohort in mice_selection.csv is kept
+    (the ranking columns are refreshed) unless `reselect` is set: the cohort must not change
+    silently when the QC definition does.
+    """
     p = _paths(data_dir)
     os.makedirs(p["processed"], exist_ok=True)
-    cand = pd.read_csv(p["candidates"])
-    qc = pd.read_csv(p["qc"])
+    cand = _read_cached(p, "candidates")
+    qc = _read_cached(p, "qc")
     merged = cand.merge(qc, on="eid", how="inner")
 
     print("\n[Step 3/4] Selecting mice...")
     mice, sessions = select_mice(merged, n_mice=n_mice)
+    if os.path.exists(p["mice"]) and not reselect:
+        kept = pd.read_csv(p["mice"])
+        frozen = kept.loc[kept["selected"], "subject"].tolist()
+        if frozen:
+            would = mice.loc[mice["selected"], "subject"].tolist()
+            mice["selected"] = mice["subject"].isin(frozen)
+            if set(would) != set(frozen):
+                print(f"  NOTE: keeping the stored cohort; a fresh ranking would swap in "
+                      f"{sorted(set(would) - set(frozen))} for {sorted(set(frozen) - set(would))} "
+                      f"(use --reselect to adopt it)")
     mice.to_csv(p["mice"], index=False)
     print(f"  -> {len(mice)} mice qualify; selected {int(mice['selected'].sum())}:")
     print(mice[mice["selected"]].to_string(index=False))
     return mice, sessions
 
 
-def step_process(data_dir: str, cache_dir: str, n_mice: int):
+def step_process(data_dir: str, cache_dir: str, n_mice: int, rt_source: str = DEFAULT_RT_SOURCE,
+                 reselect: bool = False):
     p = _paths(data_dir)
-    mice, sessions = step_select(data_dir, n_mice)
+    mice, sessions = step_select(data_dir, n_mice, reselect)
     subjects = mice.loc[mice["selected"], "subject"].tolist()
     labs = dict(zip(mice["subject"], mice["lab"]))
 
@@ -99,7 +156,8 @@ def step_process(data_dir: str, cache_dir: str, n_mice: int):
         parsed[subj] = []
         for meta, raw in items:
             parsed[subj].append(
-                parse_session_trials(raw, subj, eid=meta["eid"], date=meta["date"], lab=meta["lab"])
+                parse_session_trials(raw, subj, eid=meta["eid"], date=meta["date"], lab=meta["lab"],
+                                     rt_source=rt_source)
             )
             manifest_rows.append({
                 "subject_id": subj, "lab": meta["lab"], "session_eid": meta["eid"],
@@ -134,12 +192,30 @@ def step_process(data_dir: str, cache_dir: str, n_mice: int):
             extended_all = cohort_ext
         print(f"  -> rt <= {rt_max}s: {len(cohort)} trials, {cohort['subject_id'].nunique()} mice")
 
+    # parquet only: the extended table is Track B's own analysis input (the CSV copy was 17 MB)
     extended_all.to_parquet(os.path.join(p["processed"], "cohort_extended.parquet"), index=False)
-    extended_all.to_csv(os.path.join(p["processed"], "cohort_extended.csv"), index=False)
     summary = pd.concat(summaries, ignore_index=True)
     summary.to_csv(os.path.join(p["processed"], "summary_stats.csv"), index=False)
     print(f"  -> summary statistics: {os.path.join(p['processed'], 'summary_stats.csv')}")
     return summary
+
+
+def step_empirical(timeout: int = 1800) -> str:
+    """
+    Execute notebooks/02_track_b_empirical_baseline.ipynb in place. The notebook writes the
+    Week 2 tables to results/empirical/ and figures to results/figures/empirical/.
+    """
+    import nbformat
+    from nbclient import NotebookClient
+
+    root = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(root, "notebooks", "02_track_b_empirical_baseline.ipynb")
+    nb = nbformat.read(path, as_version=4)
+    NotebookClient(nb, timeout=timeout,
+                   resources={"metadata": {"path": os.path.join(root, "notebooks")}}).execute()
+    nbformat.write(nb, path)
+    print(f"  -> executed {path}; tables in results/empirical/, figures in results/figures/empirical/")
+    return path
 
 
 def main():
@@ -148,6 +224,11 @@ def main():
     parser.add_argument("--qc", action="store_true", help="Download all candidate sessions and compute QC")
     parser.add_argument("--select", action="store_true", help="Select mice from cached QC")
     parser.add_argument("--process", action="store_true", help="Select mice and build data/processed/")
+    parser.add_argument("--empirical", action="store_true", help="Execute the Week 2 empirical baseline notebook")
+    parser.add_argument("--refresh-qc", action="store_true", help="Recompute session QC from the local cache")
+    parser.add_argument("--reselect", action="store_true", help="Rebuild the cohort ranking instead of keeping the stored cohort")
+    parser.add_argument("--rt-source", choices=sorted(RT_SOURCES), default=DEFAULT_RT_SOURCE,
+                        help="Definition of the contract `rt` column")
     parser.add_argument("--test", action="store_true", help="Run pytest unit test suite")
     parser.add_argument("--n-mice", type=int, default=10, help="Number of mice to select")
     parser.add_argument("--n-workers", type=int, default=6, help="Parallel download threads")
@@ -161,15 +242,19 @@ def main():
     if args.test:
         import pytest
         sys.exit(pytest.main(["-v", "tests/"]))
+    elif args.empirical:
+        step_empirical()
     elif args.qc:
         step_qc(args.data_dir, cache_dir, args.n_workers)
+    elif args.refresh_qc:
+        step_refresh_qc(args.data_dir, cache_dir)
     elif args.select:
-        step_select(args.data_dir, args.n_mice)
+        step_select(args.data_dir, args.n_mice, args.reselect)
     elif args.process:
-        step_process(args.data_dir, cache_dir, args.n_mice)
+        step_process(args.data_dir, cache_dir, args.n_mice, args.rt_source, args.reselect)
     else:  # --all or no arguments
         step_qc(args.data_dir, cache_dir, args.n_workers)
-        step_process(args.data_dir, cache_dir, args.n_mice)
+        step_process(args.data_dir, cache_dir, args.n_mice, args.rt_source, args.reselect)
     print(f"\nDone in {time.time() - t0:.1f} s")
 
 

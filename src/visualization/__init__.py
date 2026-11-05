@@ -10,7 +10,26 @@ from .plots_recovery import (
     plot_psychometric_chronometric,
 )
 
+from .plots_behavior import (
+    plot_psychometric_chronometric_cohort,
+    plot_psychometric_by_mouse,
+    plot_chronometric_by_mouse,
+    plot_cbf_cohort,
+    plot_cbf_by_mouse,
+    plot_cbf_sensitivity,
+    plot_rt_distributions,
+    plot_heterogeneity,
+)
+
 __all__ = [
+    "plot_psychometric_chronometric_cohort",
+    "plot_psychometric_by_mouse",
+    "plot_chronometric_by_mouse",
+    "plot_cbf_cohort",
+    "plot_cbf_by_mouse",
+    "plot_cbf_sensitivity",
+    "plot_rt_distributions",
+    "plot_heterogeneity",
     "plot_parameter_recovery",
     "plot_error_correlation_matrix",
     "plot_model_recovery_confusion",

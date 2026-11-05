@@ -48,8 +48,28 @@ def test_parse_conventions():
     assert p["choice"].tolist() == [1, -1, 1, 0, -1, 1, -1, 1]
     # prev_choice: 1-back on the unfiltered sequence, 0 at start and after a no-go
     assert p["prev_choice"].tolist() == [0, 1, -1, 1, 0, -1, 1, -1]
-    # rt = firstMovement - stimOn
-    np.testing.assert_allclose(p["rt"].iloc[:3], [0.3, 0.05, 0.5])
+    # default rt = response_times - stimOn; the first-movement variant is kept alongside
+    np.testing.assert_allclose(p["rt"].iloc[:3], [0.5, 0.3, 0.9])
+    np.testing.assert_allclose(p["rt_response"].iloc[:3], [0.5, 0.3, 0.9])
+    np.testing.assert_allclose(p["rt_firstmove"].iloc[:3], [0.3, 0.05, 0.5])
+
+
+def test_rt_source_switch_and_validation():
+    fm = parse_session_trials(make_raw_session(), "m", rt_source="first_movement")
+    np.testing.assert_allclose(fm["rt"].iloc[:3], [0.3, 0.05, 0.5])
+    with pytest.raises(ValueError, match="rt_source"):
+        parse_session_trials(make_raw_session(), "m", rt_source="wheel")
+    # the first-movement definition drops anticipatory movements (< 0.1 s), the response one does not
+    _, c_fm = filter_trials(fm)
+    _, c_resp = filter_trials(parse_session_trials(make_raw_session(), "m"))
+    assert c_resp["dropped_rt_too_fast"] == 0
+
+
+def test_block_position_resets_at_each_block_change():
+    raw = make_raw_session()
+    raw["probabilityLeft"] = [0.5, 0.5, 0.2, 0.2, 0.2, 0.8, 0.8, 0.2]
+    p = parse_session_trials(raw, "m")
+    assert p["block_pos"].tolist() == [0, 1, 0, 1, 2, 0, 1, 0]
 
 
 def test_correct_trials_match_stimulus_side():
@@ -159,6 +179,15 @@ def test_processed_prior_bias_visible_at_zero_contrast():
     p_r = c0[c0["prior"] > 0]["choice"].eq(1).mean()
     p_l = c0[c0["prior"] < 0]["choice"].eq(1).mean()
     assert p_r > p_l + 0.1
+
+
+@needs_data
+def test_extended_cohort_keeps_both_rt_definitions():
+    ext = pd.read_parquet(os.path.join(PROCESSED, "cohort_extended.parquet"))
+    for col in ("rt_response", "rt_firstmove", "block_pos", "session_eid"):
+        assert col in ext.columns
+    np.testing.assert_allclose(ext["rt"].to_numpy(), ext["rt_response"].to_numpy())
+    assert (ext["block_pos"] >= 0).all()
 
 
 @needs_data

@@ -9,7 +9,12 @@ Track B (Joshua Koilpillai). Conventions (verified against `feedbackType` on rea
                choice_IBL = -1 corresponds to the right-side response, so choice = -choice_IBL
 - prev_choice: 1-back choice on the unfiltered session sequence; 0 on the first trial of a
                session and after a no-go trial
-- rt:          firstMovement_times - stimOn_times (wheel onset minus stimulus onset), seconds
+- rt:          response_times - stimOn_times (stimulus onset to wheel-threshold crossing, i.e. the
+               time the choice is registered), seconds. The alternative `first_movement`
+               definition (firstMovement_times - stimOn_times) is kept as `rt_firstmove`; on real
+               data it is <= 0.1 s on ~45% of responded trials (anticipatory wheel movement that
+               precedes the stimulus-driven decision), so it is not used as the decision time.
+- block_pos:   trials since the last block change within the session (0 = first trial of a block)
 """
 
 from typing import Dict, List, Tuple
@@ -19,9 +24,13 @@ import pandas as pd
 
 CONTRACT_COLUMNS = ["subject_id", "trial_idx", "contrast", "prior", "prev_choice", "choice", "rt"]
 EXTENDED_COLUMNS = [
-    "lab", "session_eid", "session_date", "session_trial", "p_left",
-    "rt_response", "feedback", "rt_in_2p5", "rt_in_5p0",
+    "lab", "session_eid", "session_date", "session_trial", "p_left", "block_pos",
+    "rt_response", "rt_firstmove", "feedback", "rt_in_2p5", "rt_in_5p0",
 ]
+
+# raw column used for the contract `rt` of each supported definition
+RT_SOURCES = {"response": "response_times", "first_movement": "firstMovement_times"}
+DEFAULT_RT_SOURCE = "response"
 
 RT_MIN = 0.1
 RT_MAX_STANDARD = 2.5
@@ -34,19 +43,36 @@ _REQUIRED_RAW = [
 ]
 
 
+def _block_position(p_left: np.ndarray) -> np.ndarray:
+    """Trials since the last change of `probabilityLeft` (0 on the first trial of each block)."""
+    n = len(p_left)
+    if n == 0:
+        return np.zeros(0, dtype=np.int32)
+    changed = np.ones(n, dtype=bool)
+    changed[1:] = ~np.isclose(p_left[1:], p_left[:-1])
+    starts = np.maximum.accumulate(np.where(changed, np.arange(n), 0))
+    return (np.arange(n) - starts).astype(np.int32)
+
+
 def parse_session_trials(
     raw: pd.DataFrame,
     subject_id: str,
     eid: str = "",
     date: str = "",
     lab: str = "",
+    rt_source: str = DEFAULT_RT_SOURCE,
 ) -> pd.DataFrame:
     """
     Convert one session's raw IBL trials table into unfiltered derived trial variables.
 
+    `rt_source` selects which timestamp defines the contract `rt` ('response' or
+    'first_movement'); both are always returned as `rt_response` / `rt_firstmove`.
+
     Returns every trial of the session (including no-go trials and neutral-block trials),
     so `prev_choice` reflects the true 1-back sequence. Filtering happens in `filter_trials`.
     """
+    if rt_source not in RT_SOURCES:
+        raise ValueError(f"rt_source must be one of {sorted(RT_SOURCES)}, got {rt_source!r}")
     missing = [c for c in _REQUIRED_RAW if c not in raw.columns]
     if missing:
         raise KeyError(missing[0])
@@ -61,6 +87,8 @@ def parse_session_trials(
     prior = np.sign(np.round(0.5 - p_left, 3))
 
     stim_on = raw["stimOn_times"].to_numpy(dtype=float)
+    rt_response = raw["response_times"].to_numpy(dtype=float) - stim_on
+    rt_firstmove = raw["firstMovement_times"].to_numpy(dtype=float) - stim_on
     return pd.DataFrame({
         "subject_id": subject_id,
         "lab": lab,
@@ -71,10 +99,12 @@ def parse_session_trials(
         "prior": prior,
         "prev_choice": prev_choice,
         "choice": choice,
-        "rt": raw["firstMovement_times"].to_numpy(dtype=float) - stim_on,
-        "rt_response": raw["response_times"].to_numpy(dtype=float) - stim_on,
+        "rt": rt_response if rt_source == "response" else rt_firstmove,
+        "rt_response": rt_response,
+        "rt_firstmove": rt_firstmove,
         "feedback": raw["feedbackType"].to_numpy(dtype=float),
         "p_left": p_left,
+        "block_pos": _block_position(p_left),
     })
 
 

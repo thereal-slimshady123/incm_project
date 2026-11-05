@@ -1,0 +1,9 @@
+,value
+n_mice,10
+mean_slope,-0.022140842833843617
+sem_slope,0.005994344557089007
+shape_counts,"{'flat': 6, 'falling': 4}"
+t_stat,-3.693621983684522
+t_p,0.004969414728980426
+wilcoxon_stat,3.0
+wilcoxon_p,0.009765625

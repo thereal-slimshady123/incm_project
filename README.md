@@ -34,12 +34,17 @@ incm_project/
 │   ├── optimization/        # [Track A - Parth] QMP loss, adaptive Nelder-Mead with CRN
 │   ├── recovery/            # [Track A - Parth] Wilson & Collins (2019) recovery pipelines
 │   ├── data/                # [Track B - Joshua] IBL ONE API loader and trial parser
-│   ├── empirical/           # [Track B - Joshua] Empirical psychometrics & CBF
-│   └── visualization/       # Publication-grade plotting routines
+│   ├── empirical/           # [Track B - Joshua] Empirical psychometrics, CBF, heterogeneity, mock data
+│   └── visualization/       # Plotting routines (plots_recovery: Track A; plots_behavior: Track B)
+├── notebooks/               # [Track B] 02_track_b_empirical_baseline.ipynb (Week 2 deliverable)
+├── scripts/                 # Track A cluster job; build_empirical_notebook.py regenerates the notebook
 ├── tests/
 │   ├── test_data_contract.py# Schema validation & physical bounds
-│   └── test_simulator.py    # DDM physics & loss surface tests
+│   ├── test_simulator.py    # DDM physics & loss surface tests
+│   ├── test_ibl_pipeline.py # [Track B] IBL preprocessing + processed-cohort contract tests
+│   └── test_empirical.py    # [Track B] mock-data harness for the empirical tools
 ├── run_track_a.py           # CLI benchmark harness for Track A
+├── run_track_b.py           # CLI for Track B: data pipeline and empirical notebook
 ├── plan.md                  # Detailed 2-person execution plan & interface contract
 └── proposal.md              # Original project proposal
 ```
@@ -87,10 +92,12 @@ pip install -r requirements.txt
 ### 1. Build the cleaned 10-mouse IBL dataset
 Connects to the public IBL Alyx server (no registration; shared public credentials), downloads
 the trial tables of all standard `biasedChoiceWorld` training sessions into `data/raw/ONE/`
-(git-ignored, ~170 MB), selects 10 mice and writes `data/processed/`:
+(git-ignored, ~170 MB), selects 10 mice and writes `data/processed/`. Small copies of the QC tables
+(`session_qc.csv`, `candidate_sessions.csv`) are kept in `data/processed/` so a fresh clone can re-select without downloading:
 ```bash
 python run_track_b.py --all          # ~40 min the first time (~2,700 small files); resumable
-python run_track_b.py --process      # rebuild processed files from the cached downloads only
+python run_track_b.py --process      # rebuild processed files from the cached downloads only (~7 min)
+python run_track_b.py --refresh-qc   # recompute session QC from the local cache (offline)
 python run_track_b.py --test         # pytest suite (includes the data-contract tests)
 ```
 
@@ -98,17 +105,43 @@ Selection rule (deterministic): standard IBL biased training sessions (project
 `ibl_neuropixel_brainwide_01`, trials table available); a session qualifies with >= 400 trials,
 both block types, and >= 80% accuracy on easy trials (|contrast| >= 0.25); a mouse qualifies with
 >= 5 qualifying sessions; mice are ranked by total valid trials with at most 2 per lab.
+**The cohort is frozen once chosen:** `--select` / `--process` keep the mice stored in
+`data/processed/mice_selection.csv` and only refresh the ranking columns (pass `--reselect` to adopt a fresh ranking).
+Ranking by valid trials with the response-time `rt` below would pick 8 different mice (the old ranking favoured mice whose
+first-movement times were slow), so the original 10 were kept.
 
 Outputs in `data/processed/` (all conform to the §3.1 schema):
 - `cohort_rt2p5.{parquet,csv}` / `cohort_rt5p0.{parquet,csv}` — all 10 mice (RT in [0.1, 2.5] s for C1; [0.1, 5.0] s for C2)
 - `rt_2p5/<mouse>.{parquet,csv}`, `rt_5p0/<mouse>.{parquet,csv}` — one file per mouse
-- `cohort_extended.{parquet,csv}` — 5.0 s cohort plus session id/date, lab, `rt_response`, feedback and `rt_in_2p5` flag
+- `cohort_extended.parquet` — 5.0 s cohort plus session id/date, lab, `block_pos` (trials since the last block change),
+  `rt_response`, `rt_firstmove`, feedback and `rt_in_2p5` flag
 - `summary_stats.csv`, `mice_selection.csv`, `session_manifest.csv` — statistics, mouse ranking, included sessions
 
 Conventions: `prior = +1` is a right-biased block (P(left stimulus) = 0.2), `choice = +1` is a
-Right response, `rt = firstMovement - stimOn`, `prev_choice` is the true 1-back choice (0 at
-session start and after a no-go). The unbiased opening trials of each session (P(left) = 0.5)
-are dropped. `rt_response = response_times - stimOn` is kept in the extended file for sensitivity checks.
+Right response, `rt = response_times - stimOn` (stimulus onset to wheel-threshold crossing), `prev_choice` is
+the true 1-back choice (0 at session start and after a no-go). The unbiased opening trials of each session
+(P(left) = 0.5) are dropped. The first-movement time `firstMovement_times - stimOn` is kept as `rt_firstmove`
+(`--rt-source first_movement` makes it the contract `rt`): it is <= 0.1 s on ~45% of responded trials
+(anticipatory wheel movement), and those trials are not a random subset (the choice follows the block more often),
+so using it with the 0.1 s filter discarded half the data and biased the CBF.
+
+### 2. Empirical baseline (Week 2): psychometrics, chronometrics, CBF, heterogeneity
+```bash
+python run_track_b.py --empirical     # executes notebooks/02_track_b_empirical_baseline.ipynb (a few minutes; any working directory)
+python scripts/build_empirical_notebook.py   # regenerates the notebook file from its source
+pytest tests/test_empirical.py        # mock-data harness (known ground truth) + schema-generality tests
+```
+The notebook writes tables to `results/empirical/` and figures to `results/figures/empirical/`.
+
+`src/empirical/` (all functions take any §3.1 DataFrame — IBL data, simulator output or mock data):
+- `psychometrics.py` — P(Right) tables with Wilson CIs, lapse-corrected logistic fits (γ = P(Right) for strongly left stimuli, λ = P(Left) for strongly right stimuli), block-prior shift with per-block lapses, chronometric / RT-quantile / conditional-accuracy tables
+- `cbf.py` — **contrast-stratified** Conditional Bias Function over RT quintiles, trial- or session-level (`cluster_col="session_eid"`) bootstrap CIs, slope and shape label (falling / flat / rising)
+- `heterogeneity.py` — one-row-per-mouse behavioural profile (incl. the prior's effect on each lapse and a within-block history effect), between-mouse summary and correlations
+- `mock.py` — synthetic §3.1 generator with known psychometric parameters, prior strength and falling / flat / rising bias, independent of the Track A simulator
+
+For Week 3 (Track A overlay): `cbf_curve(df)` is a drop-in for `compute_cbf_curve`; `compute_cbf(sim_df, bin_edges=...)`
+accepts each mouse's RT bin edges from `results/empirical/cbf_bin_edges.csv`; `plot_cbf_cohort(curves, overlay={...})` overlays model CBFs.
+`src/visualization/plots_behavior.py` holds the plotting functions.
 
 ---
 

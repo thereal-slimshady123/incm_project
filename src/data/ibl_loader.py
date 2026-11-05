@@ -11,6 +11,7 @@ and the heavy `ibllib` package is not required. Legacy sessions that lack this t
 excluded; they are recorded with status 'no_table' in the QC output.
 """
 
+import glob
 import os
 import re
 import time
@@ -175,6 +176,43 @@ def evaluate_sessions(
     if qc_path:
         qc.to_csv(qc_path, index=False)
     return sessions.merge(qc, on="eid", how="left")
+
+
+def refresh_qc_from_cache(
+    sessions: pd.DataFrame,
+    cache_dir: str = DEFAULT_CACHE_DIR,
+    qc_path: Optional[str] = None,
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """
+    Recompute the per-session QC statistics from the locally cached trial tables (no network).
+
+    Use after the QC definition changes (e.g. the RT definition behind `n_valid_trials`) so the
+    cached numbers stay consistent with `preprocess.session_qc`. Sessions whose table is not in
+    the cache keep their previous row. `sessions` needs ['eid', 'subject', 'lab', 'date', 'number'].
+    """
+    rows, missing = [], 0
+    for r in sessions.itertuples():
+        hits = glob.glob(os.path.join(
+            cache_dir, r.lab, "Subjects", r.subject, str(r.date), f"{int(r.number):03d}", "**", TRIALS_TABLE
+        ), recursive=True)
+        if not hits:
+            missing += 1
+            continue
+        try:
+            rows.append({"eid": r.eid, "status": "ok", **session_qc(pd.read_parquet(hits[0]))})
+        except KeyError as exc:
+            rows.append({"eid": r.eid, "status": "bad_table", "error": f"missing column {exc}"})
+    fresh = pd.DataFrame(rows)
+    if qc_path and os.path.exists(qc_path):
+        old = pd.read_csv(qc_path)
+        old = old[~old["eid"].isin(fresh["eid"])]
+        fresh = pd.concat([old, fresh], ignore_index=True)
+    if qc_path:
+        fresh.to_csv(qc_path, index=False)
+    if verbose:
+        print(f"  [QC] refreshed {len(rows)} sessions from cache ({missing} not cached)")
+    return fresh
 
 
 def select_mice(
