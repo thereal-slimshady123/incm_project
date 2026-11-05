@@ -21,7 +21,18 @@ from .plots_behavior import (
     plot_heterogeneity,
 )
 
+from .plots_c1 import (
+    plot_delta_bic,
+    plot_cbf_overlay_cohort,
+    plot_cbf_overlay_by_mouse,
+    plot_cbf_slope_agreement,
+)
+
 __all__ = [
+    "plot_delta_bic",
+    "plot_cbf_overlay_cohort",
+    "plot_cbf_overlay_by_mouse",
+    "plot_cbf_slope_agreement",
     "plot_psychometric_chronometric_cohort",
     "plot_psychometric_by_mouse",
     "plot_chronometric_by_mouse",

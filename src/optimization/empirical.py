@@ -38,6 +38,11 @@ EMPIRICAL_FIT_DEFAULTS: Dict[str, object] = {
 }
 
 RESULT_KEYS = ("subject_id", "model", "bound", "rt_max")
+FIT_SEED_DEFAULT = 12345      # fit_ddm's default CRN / Latin-hypercube seed, recorded in every result row
+
+# Rough relative cost of one fit job (M3 profiles three tau_b values); used to dispatch the longest
+# jobs first so that a parallel run is not held up by a straggler at the end.
+_MODEL_COST = {"M3": 3.0, "JOINT": 1.3}
 
 
 def fit_mouse(
@@ -60,8 +65,8 @@ def fit_mouse(
     return res
 
 
-def _flatten(subject: str, model: str, bound: str, rt_max: float, res: Dict[str, object]) -> Dict[str, object]:
-    row = {"subject_id": subject, "model": model, "bound": bound, "rt_max": rt_max}
+def _flatten(subject: str, model: str, bound: str, rt_max: float, res: Dict[str, object], seed: int) -> Dict[str, object]:
+    row = {"subject_id": subject, "model": model, "bound": bound, "rt_max": rt_max, "seed": seed}
     for key in ("n_trials", "n_params", "nll", "bic", "aic", "success", "nit", "nfev"):
         row[key] = res[key]
     for name, val in res["params"].items():
@@ -71,7 +76,7 @@ def _flatten(subject: str, model: str, bound: str, rt_max: float, res: Dict[str,
 
 def _job(subject: str, df_mouse: pd.DataFrame, model: str, bound: str, rt_max: float, overrides: dict):
     res = fit_mouse(df_mouse, model, bound, rt_max, **overrides)
-    return _flatten(subject, model, bound, rt_max, res)
+    return _flatten(subject, model, bound, rt_max, res, overrides.get("seed", FIT_SEED_DEFAULT))
 
 
 def fit_cohort(
@@ -82,33 +87,58 @@ def fit_cohort(
     n_jobs: int = -1,
     cache_path: Optional[str] = None,
     subjects: Optional[Iterable[str]] = None,
+    seeds: Optional[Sequence[int]] = None,
     **overrides,
 ) -> pd.DataFrame:
     """
-    Fit every (mouse, model, bound) combination in parallel; one row per fit.
+    Fit every (mouse, model, bound[, seed]) combination in parallel; one row per fit.
+
+    `seeds` runs independent replicate fits (different Latin-hypercube screen and CRN noise) in the
+    same pool; their BIC spread is the optimizer-noise estimate (see `src.optimization.c1`).
 
     `cohort` is a cohort table matching `rt_max` (cohort_rt2p5 for 2.5, cohort_rt5p0 for 5.0).
-    With `cache_path` (CSV) finished fits are appended after the run and skipped on the next call,
-    so an interrupted ~hour-long job resumes. Changing `overrides` between calls into the same
-    cache is NOT detected: use a different `cache_path` for a different configuration.
+    With `cache_path` (CSV) every finished fit is written immediately and skipped on the next call,
+    so an interrupted ~hour-long job resumes. Jobs are dispatched longest-first (M3 before M1/M2).
+    Changing `overrides` between calls into the same cache is NOT detected: use a different
+    `cache_path` for a different configuration.
     """
     subs = list(subjects) if subjects is not None else sorted(cohort["subject_id"].unique())
     done = pd.read_csv(cache_path) if cache_path and os.path.exists(cache_path) else pd.DataFrame()
-    finished = set(map(tuple, done[list(RESULT_KEYS)].astype({"rt_max": float}).values.tolist())) if len(done) else set()
+    if len(done) and "seed" not in done.columns:
+        done["seed"] = FIT_SEED_DEFAULT
+    keys = list(RESULT_KEYS) + ["seed"]
+    finished = set(map(tuple, done[keys].astype({"rt_max": float, "seed": int}).values.tolist())) if len(done) else set()
+    seed_list = [int(x) for x in seeds] if seeds is not None else [int(overrides.get("seed", FIT_SEED_DEFAULT))]
+    overrides = {k: v for k, v in overrides.items() if k != "seed"}
 
     tasks = []
     for s in subs:
         d = cohort[cohort["subject_id"] == s].reset_index(drop=True)
         for m in models:
             for b in bounds:
-                if (s, m, b, float(rt_max)) not in finished:
-                    tasks.append((s, d, m, b, float(rt_max), overrides))
-    new = Parallel(n_jobs=n_jobs, verbose=5)(delayed(_job)(*t) for t in tasks) if tasks else []
-    out = pd.concat([done, pd.DataFrame(new)], ignore_index=True) if new else done
-    if cache_path and new:
-        os.makedirs(os.path.dirname(os.path.abspath(cache_path)), exist_ok=True)
-        out.to_csv(cache_path, index=False)
-    return out
+                for sd in seed_list:
+                    if (s, m, b, float(rt_max), sd) not in finished:
+                        tasks.append((s, d, m, b, float(rt_max), {**overrides, "seed": sd}))
+    tasks.sort(key=lambda t: -_MODEL_COST.get(t[2].upper(), 1.0) * (1.15 if t[3] != "fixed" else 1.0))
+
+    # Results are saved as each fit completes, so a killed run loses at most the fits in flight.
+    rows = done.to_dict("records")
+    if tasks:
+        stream = Parallel(n_jobs=n_jobs, verbose=5, return_as="generator_unordered")(
+            delayed(_job)(*t) for t in tasks
+        )
+        for row in stream:
+            rows.append(row)
+            if cache_path:
+                _atomic_csv(pd.DataFrame(rows), cache_path)
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+def _atomic_csv(frame: pd.DataFrame, path: str) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    tmp = path + ".tmp"
+    frame.to_csv(tmp, index=False)
+    os.replace(tmp, path)
 
 
 def fitted_params(row: "pd.Series | Dict[str, float]") -> Dict[str, float]:
@@ -126,13 +156,14 @@ def simulate_from_fit(
     n_rep: int = 5,
     seed: int = 0,
     dt: float = 0.002,
+    rt_min: float = 0.1,
 ) -> pd.DataFrame:
     """
     Posterior-predictive §3.1 table: replay a mouse's actual trial covariates (contrast, prior,
     previous choice) `n_rep` times through the fitted model. Feed it to `src.empirical.compute_cbf`
     (with the mouse's `bin_edges` from results/empirical/cbf_bin_edges.csv) for the model-vs-data
     CBF overlay, or to the psychometric / chronometric tools. Simulated RTs above `rt_max` are
-    dropped to mirror the data's exclusion filter.
+    dropped (and RTs below `rt_min`, the data's lower cutoff) to mirror the data's exclusion filter.
     """
     sim = DDMSimulator(dt=dt, t_max=rt_max)
     out = sim.simulate(
@@ -145,7 +176,7 @@ def simulate_from_fit(
         subject_id=str(trials_df["subject_id"].iloc[0]),
         rng=np.random.default_rng(seed),
     )
-    out = out[out["rt"] <= rt_max].reset_index(drop=True)
+    out = out[(out["rt"] <= rt_max) & (out["rt"] >= rt_min)].reset_index(drop=True)
     out["trial_idx"] = np.arange(len(out), dtype=np.int32)
     return out
 

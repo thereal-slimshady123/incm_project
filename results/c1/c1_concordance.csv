@@ -1,0 +1,11 @@
+subject_id,winner,evidence,emp_shape,emp_slope,winner_shape,shape_agrees,cbf_closest
+CSHL045,M2,inconclusive,falling,-0.039957514864167216,flat,False,M2
+CSHL046,M2,inconclusive,flat,0.0078178634004555,flat,True,M3
+CSH_ZAD_002,M3,inconclusive,falling,-0.03317519112914949,rising,False,M2
+KS019,M3,inconclusive,falling,-0.03761235462878561,rising,False,M2
+KS021,M2,inconclusive,flat,-0.023171545024417053,flat,True,M2
+NYU-01,M3,inconclusive,flat,-0.02365725210736238,rising,False,M2
+NYU-09,M2,inconclusive,flat,0.01227673507421682,flat,True,M3
+ZM_1743,M3,inconclusive,flat,-0.02858144661837578,rising,False,M2
+ibl_witten_07,M2,inconclusive,falling,-0.04122323618824642,flat,False,M2
+ibl_witten_13,M2,inconclusive,flat,-0.014124486252604526,flat,True,M2

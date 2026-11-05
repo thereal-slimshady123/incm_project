@@ -1,0 +1,10 @@
+[Parallel(n_jobs=6)]: Using backend LokyBackend with 6 concurrent workers.
+[Parallel(n_jobs=6)]: Done   3 out of   6 | elapsed:  6.5min remaining:  6.5min
+[Parallel(n_jobs=6)]: Done   6 out of   6 | elapsed: 10.1min finished
+      subject_id  z_fixed      nll  bic_free_params  n_params  nll_M1_free  nll_M2_free  dnll_vs_free_M1  dnll_vs_M2
+0         NYU-09      0.2  47406.8          94893.7         8      46835.6      46773.9            571.2       632.9
+1         NYU-09      0.3  48900.2          97880.6         8      46835.6      46773.9           2064.6      2126.3
+2         NYU-09      0.4  51568.9         103218.0         8      46835.6      46773.9           4733.3      4795.0
+3  ibl_witten_13      0.2  85452.6         170989.8         8      85258.9      84745.9            193.7       706.6
+4  ibl_witten_13      0.3  87003.4         174091.5         8      85258.9      84745.9           1744.6      2257.5
+5  ibl_witten_13      0.4  91218.1         182520.9         8      85258.9      84745.9           5959.3      6472.2

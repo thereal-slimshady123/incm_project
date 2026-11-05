@@ -35,16 +35,19 @@ incm_project/
 │   ├── recovery/            # [Track A - Parth] Wilson & Collins (2019) recovery pipelines
 │   ├── data/                # [Track B - Joshua] IBL ONE API loader and trial parser
 │   ├── empirical/           # [Track B - Joshua] Empirical psychometrics, CBF, heterogeneity, mock data
-│   └── visualization/       # Plotting routines (plots_recovery: Track A; plots_behavior: Track B)
+│   └── visualization/       # Plotting routines (plots_recovery: Track A; plots_behavior: Track B; plots_c1: C1 figures)
 ├── notebooks/               # [Track B] 02_track_b_empirical_baseline.ipynb (Week 2 deliverable)
 ├── scripts/                 # Track A cluster job; build_empirical_notebook.py regenerates the notebook
 ├── tests/
 │   ├── test_data_contract.py# Schema validation & physical bounds
 │   ├── test_simulator.py    # DDM physics & loss surface tests
 │   ├── test_ibl_pipeline.py # [Track B] IBL preprocessing + processed-cohort contract tests
-│   └── test_empirical.py    # [Track B] mock-data harness for the empirical tools
+│   ├── test_empirical.py    # [Track B] mock-data harness for the empirical tools
+│   ├── test_empirical_fit.py# Week 3: fitter extensions, shared cohort-fitting helpers
+│   └── test_c1.py           # Week 3: C1 tables, statistics and model-vs-data CBF
 ├── run_track_a.py           # CLI benchmark harness for Track A
 ├── run_track_b.py           # CLI for Track B: data pipeline and empirical notebook
+├── run_c1.py                # Week 3 C1 runner: fit M1/M2/M3 to the mice, tables, statistics, overlays
 ├── plan.md                  # Detailed 2-person execution plan & interface contract
 └── proposal.md              # Original project proposal
 ```
@@ -158,7 +161,7 @@ Why the empirical settings differ from `fit_ddm`'s defaults (all found by piloti
 - `fit_variability=True` — `s_v`, `s_z` (plan §4); used in BOTH fixed and Weibull fits so C2 compares like with like.
 - `bias_type='drift'` — a neutral side bias `v_0` in every model; 7/10 mice favour one side by 10-25 points at 0% contrast, which `z` / `v_b` / `b_max` would otherwise absorb.
 - `t_max` = the RT cutoff (the default 2.5 s cannot simulate the 5.0 s data set).
-- Heavy search (`n_screen=80, n_starts=5, n_restarts=3`) — with the light defaults the BIC of the same fit varied by ~660 across seeds; the heavy search brings it to ~60 (about 8 min per 22k-trial fit). **Treat |ΔBIC| < ~100 as inconclusive.**
+- Heavy search (`n_screen=80, n_starts=5, n_restarts=3`) — with the light defaults the BIC of the same fit varied by ~660 across seeds on one mouse; the heavy search is better (about 8 min of CPU per fit for M1/M2, ~3x for M3). **Single fits are still noisy: the C1 replicate fits on the full cohort gave a pooled run-to-run SD of ~250 BIC (per-fit spread 3-1041), so always run replicate seeds (`fit_cohort(seeds=...)`) and do not read per-mouse differences below a few hundred BIC.**
 
 Known limits of the model class (report them, they bound what C1/C2 can say): there is no lapse process, and some
 mice (KS019, KS021, CSH_ZAD_002, NYU-01) make *block-dependent* lapse errors at high contrast, which no drift/start-point
@@ -167,6 +170,43 @@ per-mouse BIC differences; `simulate_from_fit(...)` replays a mouse's covariates
 `python scripts/validate_empirical_recovery.py` checks M1/M2/M3 recovery for this extended model class on a real trial design.
 Result (6 datasets per model, 6,000 trials, NYU-09's trial design; `results/recovery/empirical_model_recovery.csv`): 18/18 datasets
 won by the true model, but 4/18 by less than 10 BIC, all in the M2/M3 pair — so M2 vs M3 is the weakest contrast in Week 3.
+
+### 4. Week 3, C1: which route does the prior take? (`run_c1.py`)
+```bash
+python run_c1.py fit                          # 10 mice x M1/M2/M3 x 2 seeds = 60 heavy fits, 12 workers: ~2 h awake (resumable)
+python run_c1.py fit --variant no_history --n-jobs 6   # sensitivity without the choice-history drift v_h: ~15 min
+python run_c1.py analyze                      # tables, tests, posterior-predictive CBFs, figures: ~30 s
+python run_c1.py smoke                        # tiny end-to-end check (3 mice, seconds)
+python scripts/check_m1_start_point.py        # M1 with z forced to 0.15/0.3/0.45 on two mice: ~12 min
+```
+Outputs: `results/c1/c1_report.md` (all tables), `c1_bic_table.csv` (per-mouse BIC and ΔBIC vs M2), `c1_pairwise_tests.csv`
+(paired Wilcoxon / t / sign tests, bootstrap CI over mice, Holm-adjusted), `c1_subset_tests.csv` (without the lapse-affected mice
+or KS021), `c1_cbf_fit.csv` / `c1_cbf_model_tests.csv` (predicted vs empirical CBF), `c1_concordance.csv`, `c1_parameters.csv`,
+`c1_params_at_bounds.csv`; figures in `results/figures/c1/`. Code: `src/optimization/c1.py` (analysis), `src/visualization/plots_c1.py`.
+Conventions: ΔBIC = BIC(model) − BIC(reference), negative = better. Each (mouse, model) is fitted from two independent seeds; the
+best-BIC run is kept and the replicate spread gives the noise floor (`decisive` = ΔBIC above max(10, 2.8 × pooled SD) = 708 BIC).
+The predicted CBF replays each mouse's own trials 20 times through its fitted model and is binned on that mouse's empirical RT bins.
+
+**Result (10 mice, 2.5 s cutoff, fixed bounds; all three models have β, s_v, s_z, v_h and a neutral side bias):**
+- **M1 (start point) is rejected.** M1 is worse than M2 in 10/10 mice and worse than M3 in 10/10: mean ΔBIC +369 vs M2 (bootstrap 95% CI
+  165 to 597; Wilcoxon p = 0.002, Holm 0.006) and +368 vs M3. Its fitted start-point bias collapses to |z| ≤ 0.1 in all mice; forcing z = 0.15-0.45 makes the fit far worse
+  (ΔNLL of +190 to +600 at 0.15 and thousands at 0.45 on NYU-09 / ibl_witten_13), so this is not an optimizer failure. Dropping the
+  history term v_h leaves it unchanged (M1 worse in 9/10, mean +1,140, Holm p = 0.008). Predicted M1 CBFs are far below the data (0.1 vs 0.25-0.35).
+- **M2 (drift bias) vs M3 (dynamic bias) is not separable by BIC**: mean ΔBIC(M3 − M2) = +1 (CI −126 to 97; Wilcoxon p = 0.63); M2 has the lowest BIC in 6 mice, M3 in 4,
+  and no single mouse exceeds the noise threshold. (The recovery study already flagged this pair as the weakest contrast.)
+- **The CBF shape favours M2 over M3.** Empirical CBFs are falling (4 mice) or flat (6), none rising. M3 fits predict a rising CBF in 9/10 mice (+0.01 to +0.04 per bin);
+  M2 predicts the mild decline that a drift bias produces (−0.01 to −0.04) which matches. M2's CBF is closer to the data than M3's in 8/10 mice
+  (RMSE +0.026 for M3, Wilcoxon p = 0.02, Holm-adjusted) and than M1's in 10/10 (p = 0.006).
+- **Verdict:** the prior enters as a drift/choice-bias (M2) rather than a start-point shift (M1); M3 is not excluded by likelihood but is contradicted by the CBF shape.
+
+Robustness and caveats (report these alongside the result):
+- *Mis-specified mice.* Without KS019, KS021, CSH_ZAD_002 and NYU-01 (block-dependent lapses) the M1-vs-M2 effect has the same size (+372, CI 55 to 702) but with n = 6 the Wilcoxon test cannot go below p = 0.031 (Holm 0.09). Three of the four M3 winners are among these mice.
+- *All models under-predict the fastest RT bin* (cohort CBF in bin 1: data 0.347, M2 0.27, M3 0.17, M1 0.18). Something in the fastest responses is
+  prior-driven beyond what any single-route model captures; a combined start-point + drift model (`model_type='JOINT'` exists in the fitter) is the natural follow-up and was not run.
+- *Parameters on bounds:* `t0` at its lower bound (0.08 s) in 5/10 mice and `s_z` at its upper bound (0.6) in 4-5/10 for each model (`c1_params_at_bounds.csv`); these affect all models alike.
+- *Optimizer noise* is large (pooled SD ≈ 250 BIC) and was only reduced by two seeds; the group-level results are the reliable ones, per-mouse winners are not.
+- *Choice history.* Because the previous choice follows the block, v_h partly carries block information in every model; the no-history refit (`c1_no_history_*`) shows the ranking does not depend on it.
+- `SE` in the CBF discrepancy (`chi2_per_bin`) assumes independent trials and is descriptive only.
 
 ---
 
