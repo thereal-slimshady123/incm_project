@@ -32,6 +32,14 @@ PARAM_SPECS = {
     # Collapsing bounds (C2)
     "lam": {"init": 1.5, "bounds": (0.4, 3.5), "desc": "Weibull scale / collapse latency"},
     "gamma": {"init": 2.0, "bounds": (1.0, 4.0), "desc": "Weibull shape / steepness"},
+    # Contrast non-linearity of the sensory drift k * sign(c) * |c|^beta (plan §4, Week 1)
+    "beta": {"init": 0.5, "bounds": (0.05, 1.5), "desc": "Contrast exponent"},
+    # Neutral side bias (independent of the block prior); real mice have large ones
+    "v_0": {"init": 0.0, "bounds": (-1.5, 1.5), "desc": "Neutral drift offset"},
+    "z_0": {"init": 0.0, "bounds": (-0.8, 0.8), "desc": "Neutral starting-point offset (fraction of a)"},
+    # Trial-to-trial variabilities (plan §4, Week 1 / Week 3 C2)
+    "s_v": {"init": 0.5, "bounds": (0.0, 3.0), "desc": "Drift-rate variability (SD)"},
+    "s_z": {"init": 0.15, "bounds": (0.0, 0.6), "desc": "Starting-point variability (range as fraction of a)"},
 }
 
 # Build initial simplex with physiologically scaled step sizes
@@ -47,6 +55,11 @@ SIMPLEX_STEPS = {
     "tau_b": 0.2,
     "lam": 0.4,
     "gamma": 0.5,
+    "beta": 0.25,
+    "v_0": 0.3,
+    "z_0": 0.2,
+    "s_v": 0.4,
+    "s_z": 0.12,
 }
 
 # tau_b is not identifiable jointly with b_max (pilot recovery: r ~ 0), so M3 fits
@@ -72,6 +85,10 @@ class DDMFitter:
         n_sim_final: int = 2000,
         n_extra_params: int = 0,
         rt_bandwidth: Optional[float] = 0.01,
+        fit_beta: bool = False,
+        fit_variability: bool = False,
+        quantiles: Optional[Sequence[float]] = None,
+        bias_type: Optional[str] = None,
     ):
         """
         Parameters
@@ -102,6 +119,21 @@ class DDMFitter:
         rt_bandwidth : float, optional
             Gaussian kernel width (s) for smoothing simulated RTs across QMP bins, so the
             CRN objective is continuous rather than a step function. None = hard counts.
+        fit_beta : bool
+            Also fit the contrast exponent beta of the sensory drift (otherwise beta = 1,
+            linear in contrast, unless given in `fixed_params`). Needed for real mouse data,
+            whose psychometric function saturates at low contrast.
+        fit_variability : bool
+            Also fit the trial-to-trial drift (s_v) and starting-point (s_z) variabilities
+            (otherwise both 0, unless given in `fixed_params`).
+        bias_type : {None, 'drift', 'start', 'both'}
+            Adds a neutral side-bias term shared by ALL models (so it cannot favour one prior
+            mechanism): 'drift' fits v_0, 'start' fits z_0, 'both' fits both. Real mice have
+            side biases of 10-25 percentage points at 0% contrast; without this term z, v_b
+            and b_max absorb them.
+        quantiles : sequence of float, optional
+            QMP quantile cut points (default 0.1, 0.3, 0.5, 0.7, 0.9). Add e.g. 0.95 / 0.99
+            to make the likelihood sensitive to the RT tail (the C2 urgency question).
         """
         self.model_type = model_type.upper()
         self.bound_type = bound_type.lower()
@@ -114,6 +146,12 @@ class DDMFitter:
         self.n_sim_final = n_sim_final
         self.n_extra_params = n_extra_params
         self.rt_bandwidth = rt_bandwidth
+        self.fit_beta = fit_beta
+        self.fit_variability = fit_variability
+        self.quantiles = tuple(quantiles) if quantiles is not None else None
+        if bias_type not in (None, "drift", "start", "both"):
+            raise ValueError("bias_type must be None, 'drift', 'start' or 'both'")
+        self.bias_type = bias_type
 
         self.param_names = [p for p in self._determine_param_names() if p not in self.fixed_params]
         self.simulator = DDMSimulator(dt=dt, t_max=t_max)
@@ -123,8 +161,14 @@ class DDMFitter:
         Select active parameter names for this model architecture.
         """
         names = ["a", "t0", "k"]
+        if self.fit_beta:
+            names.append("beta")
         if self.fit_history:
             names.append("v_h")
+        if self.bias_type in ("drift", "both"):
+            names.append("v_0")
+        if self.bias_type in ("start", "both"):
+            names.append("z_0")
 
         if self.model_type == "M1":
             names.append("z")
@@ -140,6 +184,9 @@ class DDMFitter:
 
         if self.bound_type in ("collapsing", "weibull"):
             names.extend(["lam", "gamma"])
+
+        if self.fit_variability:
+            names.extend(["s_v", "s_z"])
 
         return names
 
@@ -259,7 +306,8 @@ class DDMFitter:
         """
         # Condition on previous choice whenever v_h is fitted, so it is identifiable
         group_cols = ("contrast", "prior", "prev_choice") if self.fit_history else ("contrast", "prior")
-        qmp_data = QMPDataset(trials_df, group_cols=group_cols)
+        qmp_kwargs = {"quantiles": self.quantiles} if self.quantiles is not None else {}
+        qmp_data = QMPDataset(trials_df, group_cols=group_cols, **qmp_kwargs)
         n_total = float(qmp_data.total_trials)
         template = self._simulation_template(qmp_data, self.n_sim_per_cond)
         n_fev = [0]
@@ -349,6 +397,13 @@ def fit_ddm(
     n_sim_final: int = 2000,
     tau_b_grid: Optional[Sequence[float]] = DEFAULT_TAU_B_GRID,
     rt_bandwidth: Optional[float] = 0.01,
+    t_max: float = 2.5,
+    dt: float = 0.002,
+    fit_beta: bool = False,
+    fit_variability: bool = False,
+    quantiles: Optional[Sequence[float]] = None,
+    fixed_params: Optional[Dict[str, float]] = None,
+    bias_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Standard top-level functional API adhering to §3.2 Model API specification.
@@ -356,18 +411,31 @@ def fit_ddm(
     For M3, tau_b is profiled over tau_b_grid (one fit per value, b_max free) and the
     best final NLL is kept; tau_b still counts as a parameter in BIC/AIC. Pass
     tau_b_grid=None to fit tau_b freely.
+
+    For real data pass `t_max` equal to the RT cutoff of the data (2.5 or 5.0 s; the default
+    2.5 s cannot simulate the 5.0 s set), and `fit_beta=True, fit_variability=True,
+    bias_type='drift'`.
+    `bound_type` is 'fixed' or 'weibull' ('collapsing' is accepted as an alias).
     """
+    base_fixed = dict(fixed_params or {})
+
     def make_fitter(fixed_params=None, n_extra_params=0):
         return DDMFitter(
             model_type=model_type,
             bound_type=bound_type,
             fit_history=fit_history,
             n_sim_per_cond=n_sim_per_cond,
+            dt=dt,
+            t_max=t_max,
             crn_seed=seed,
-            fixed_params=fixed_params,
+            fixed_params={**base_fixed, **(fixed_params or {})},
             n_sim_final=n_sim_final,
             n_extra_params=n_extra_params,
             rt_bandwidth=rt_bandwidth,
+            fit_beta=fit_beta,
+            fit_variability=fit_variability,
+            quantiles=quantiles,
+            bias_type=bias_type,
         )
 
     fit_kwargs = dict(

@@ -143,6 +143,31 @@ For Week 3 (Track A overlay): `cbf_curve(df)` is a drop-in for `compute_cbf_curv
 accepts each mouse's RT bin edges from `results/empirical/cbf_bin_edges.csv`; `plot_cbf_cohort(curves, overlay={...})` overlays model CBFs.
 `src/visualization/plots_behavior.py` holds the plotting functions.
 
+### 3. Week 3: fitting the DDM family to the mice (C1 and C2)
+`src/optimization/empirical.py` is the shared entry point, so C1 (M1/M2/M3, fixed bounds) and C2
+(fixed vs Weibull, 2.5 s vs 5.0 s) use identical settings:
+```python
+from src.optimization.empirical import fit_cohort, simulate_from_fit, delta_bic, fitted_params
+c25 = pd.read_parquet("data/processed/cohort_rt2p5.parquet")
+res = fit_cohort(c25, models=("M1", "M2", "M3"), bounds=("fixed",), rt_max=2.5, cache_path="results/fits/c1_fixed_2p5.csv")
+c50 = pd.read_parquet("data/processed/cohort_rt5p0.parquet")        # C2 extended cutoff: rt_max=5.0
+```
+Fits run in parallel and resume from `cache_path` (use a different cache file per configuration).
+Why the empirical settings differ from `fit_ddm`'s defaults (all found by piloting on the real mice):
+- `fit_beta=True` — with the contrast exponent fixed at 1 the model under-predicts 6%-contrast accuracy by ~25 points; the fitted exponent is small (~0.15-0.35).
+- `fit_variability=True` — `s_v`, `s_z` (plan §4); used in BOTH fixed and Weibull fits so C2 compares like with like.
+- `bias_type='drift'` — a neutral side bias `v_0` in every model; 7/10 mice favour one side by 10-25 points at 0% contrast, which `z` / `v_b` / `b_max` would otherwise absorb.
+- `t_max` = the RT cutoff (the default 2.5 s cannot simulate the 5.0 s data set).
+- Heavy search (`n_screen=80, n_starts=5, n_restarts=3`) — with the light defaults the BIC of the same fit varied by ~660 across seeds; the heavy search brings it to ~60 (about 8 min per 22k-trial fit). **Treat |ΔBIC| < ~100 as inconclusive.**
+
+Known limits of the model class (report them, they bound what C1/C2 can say): there is no lapse process, and some
+mice (KS019, KS021, CSH_ZAD_002, NYU-01) make *block-dependent* lapse errors at high contrast, which no drift/start-point
+mechanism reproduces; their fits are mis-specified and should be shown with and without them. `delta_bic(...)` builds
+per-mouse BIC differences; `simulate_from_fit(...)` replays a mouse's covariates through a fit for the model-vs-data CBF overlay.
+`python scripts/validate_empirical_recovery.py` checks M1/M2/M3 recovery for this extended model class on a real trial design.
+Result (6 datasets per model, 6,000 trials, NYU-09's trial design; `results/recovery/empirical_model_recovery.csv`): 18/18 datasets
+won by the true model, but 4/18 by less than 10 BIC, all in the M2/M3 pair — so M2 vs M3 is the weakest contrast in Week 3.
+
 ---
 
 ## Interface Contract (§3 in `plan.md`)

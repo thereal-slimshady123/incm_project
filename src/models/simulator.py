@@ -84,6 +84,8 @@ class DDMSimulator:
             - 'k': sensory sensitivity (> 0)
             - 'beta': contrast non-linearity exponent (default 1.0)
             - 'v_h': choice history weight (optional, default 0.0)
+            - 'v_0': neutral side-bias drift offset, independent of the prior (default 0.0)
+            - 'z_0': neutral side-bias starting-point offset as a fraction of a (default 0.0)
             - 'z': starting point bias parameter (for M1; in [-1, 1], default 0.0)
             - 'v_b': drift bias parameter (for M2; default 0.0)
             - 'b_max': dynamic bias ceiling (for M3; default 0.0)
@@ -149,6 +151,8 @@ class DDMSimulator:
         k = float(params.get("k", 2.5))
         beta = float(params.get("beta", 1.0))
         v_h = float(params.get("v_h", 0.0))
+        v_0 = float(params.get("v_0", 0.0))
+        z_0 = float(params.get("z_0", 0.0))
         z = float(params.get("z", 0.0))
         v_b = float(params.get("v_b", 0.0))
         b_max = float(params.get("b_max", 0.0))
@@ -163,7 +167,7 @@ class DDMSimulator:
         v_sensory = k * np.sign(contrasts) * (abs_c ** beta)
 
         # Baseline drift for each trial
-        drift_rate = v_sensory + v_h * prev_choices
+        drift_rate = v_sensory + v_h * prev_choices + v_0
 
         model_key = model_type.upper()
         if model_key in ("M2", "JOINT"):
@@ -176,6 +180,8 @@ class DDMSimulator:
             mean_x0 = a * np.clip(z, -0.95, 0.95) * priors
         else:
             mean_x0 = np.zeros(n_trials, dtype=np.float64)
+        if z_0 != 0.0:
+            mean_x0 = mean_x0 + a * np.clip(z_0, -0.95, 0.95)
 
         # Boundary function
         bound_fn = get_boundary_function(bound_type)
