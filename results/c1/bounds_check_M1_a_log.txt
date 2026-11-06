@@ -1,0 +1,8 @@
+[Parallel(n_jobs=4)]: Using backend LokyBackend with 4 concurrent workers.
+[Parallel(n_jobs=4)]: Done   2 out of   4 | elapsed: 13.7min remaining: 13.7min
+[Parallel(n_jobs=4)]: Done   4 out of   4 | elapsed: 15.9min finished
+  subject_id model   seed  bic_default  bic_wide  dbic_wide_minus_default  wide_t0  p_t0  wide_s_z  p_s_z
+0    CSHL045    M1  12345     81796.46  81326.32                  -470.14     0.10  0.08      1.20   0.60
+1    CSHL045    M1    777     81933.60  81404.03                  -529.56     0.10  0.08      1.12   0.45
+2    ZM_1743    M1  12345     67460.22  67485.47                    25.25     0.05  0.08      0.51   0.60
+3    ZM_1743    M1    777     67357.42  67084.94                  -272.47     0.11  0.08      1.20   0.58

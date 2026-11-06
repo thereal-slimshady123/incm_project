@@ -131,3 +131,36 @@ def test_fit_cohort_replicate_seeds_are_independent_rows(tmp_path):
     r2 = fit_cohort(a, models=("M2",), n_jobs=1, cache_path=cache, seeds=(1, 2, 3), **tiny)
     assert sorted(r2["seed"]) == [1, 2, 3]            # only seed 3 was added
     assert len(c1.collapse_replicates(r2)) == 1
+
+
+def test_run_c1_smoke_end_to_end(tmp_path):
+    """fit -> analyze on 3 mice with tiny settings: every table and figure of the C1 pipeline is produced."""
+    import run_c1
+    run_c1.main(["smoke", "--out", str(tmp_path), "--n-jobs", "2", "--seeds", "1", "2"])
+    out = tmp_path / "_smoke"
+    for name in ("c1_fits.csv", "c1_bic_table.csv", "c1_pairwise_tests.csv", "c1_cbf_fit.csv", "c1_report.md",
+                 "c1_no_history_bic_table.csv", "c1_wide_bounds_bic_table.csv", "c1_joint_bic_table.csv", "c1_joint_cbf_tests.csv"):
+        assert (out / name).exists(), name
+    assert (out / "figures" / "c1_delta_bic.png").exists()
+    assert len(pd.read_csv(out / "c1_bic_table.csv")) == 3
+
+
+def test_joint_comparison_and_its_pairwise_tests():
+    main = c1.collapse_replicates(_fits({"M1": 100, "M2": 0, "M3": 0}, jitter=2.0))
+    joint = c1.collapse_replicates(_fits({"JOINT": -80}, jitter=2.0).assign(p_z=0.1, p_v_b=0.4))
+    tab = c1.joint_comparison(main, joint)
+    assert (tab["winner"] == "JOINT").all() and (tab["dbic_JOINT_vs_M2"] < -70).all()
+    assert np.allclose(tab[["p_z"]], 0.1)
+    tt = c1.pairwise_tests(tab, "bic", pairs=c1.JOINT_PAIRS).set_index("pair")
+    assert set(tt.index) == {"JOINT vs M2", "JOINT vs M1", "JOINT vs M3"}
+    assert tt.loc["JOINT vs M2", "n_first_better"] == 10 and tt.loc["JOINT vs M2", "wilcoxon_p"] < 0.01
+
+
+def test_overlay_plot_accepts_the_joint_model(tmp_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    from src.visualization.plots_c1 import plot_cbf_overlay_cohort
+    emp = pd.DataFrame({"subject_id": ["a"] * 5 + ["b"] * 5, "bin": list(range(5)) * 2, "cbf": np.linspace(0.3, 0.2, 10)})
+    pred = pd.concat([emp.assign(model=m, cbf=emp["cbf"] * f) for m, f in (("M1", .5), ("M2", .9), ("M3", 1.1), ("JOINT", 1.0))])
+    fig = plot_cbf_overlay_cohort(emp, pred, models=("M1", "M2", "M3", "JOINT"), save_path=str(tmp_path / "o.png"))
+    assert len(fig.axes) == 5 and (tmp_path / "o.png").exists()

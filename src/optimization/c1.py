@@ -31,7 +31,8 @@ from ..empirical.cbf import DEFAULT_MAX_ABS_CONTRAST, cbf_slope, compute_cbf
 from .empirical import fitted_params, simulate_from_fit
 
 MODELS = ("M1", "M2", "M3")
-MODEL_LABELS = {"M1": "M1 start point (z)", "M2": "M2 drift bias (v_b)", "M3": "M3 dynamic bias b(t)"}
+MODEL_LABELS = {"M1": "M1 start point (z)", "M2": "M2 drift bias (v_b)", "M3": "M3 dynamic bias b(t)",
+                "JOINT": "JOINT start point + drift bias"}
 MODEL_SHAPE = {"M1": "falling", "M2": "flat", "M3": "rising"}
 PAIRS: Tuple[Tuple[str, str], ...] = (("M1", "M2"), ("M3", "M2"), ("M1", "M3"))
 KEYS = ["subject_id", "model", "bound", "rt_max"]
@@ -53,7 +54,7 @@ def collapse_replicates(fits: pd.DataFrame) -> pd.DataFrame:
     One row per (mouse, model, bound, rt_max): the replicate with the lowest BIC, plus
     `n_reps`, `bic_spread` (max - min over replicates; 0 for a single run) and `bic_mean`.
     """
-    fits = fits.copy()
+    fits = fits.reset_index(drop=True)
     if "seed" not in fits.columns:
         fits["seed"] = 0
     g = fits.groupby(KEYS, sort=True)
@@ -137,18 +138,20 @@ def _holm(p: Sequence[float]) -> np.ndarray:
     return adj
 
 
-def pairwise_tests(table: pd.DataFrame, metric: str = "bic", n_boot: int = 10000, seed: int = 0) -> pd.DataFrame:
+def pairwise_tests(table: pd.DataFrame, metric: str = "bic", n_boot: int = 10000, seed: int = 0,
+                   pairs: Sequence[Tuple[str, str]] = PAIRS) -> pd.DataFrame:
     """
     Paired across-mouse tests of every model pair (A vs B) on the per-mouse criterion.
     `mean_delta` = mean over mice of (A - B); negative favours A.
 
     Columns: n_mice, mean_delta, median_delta, sum_delta (log group Bayes factor x 2 for BIC),
     ci_lo/ci_hi (bootstrap over mice), n_first_better / n_second_better (mice favouring A / B), sign_p (exact two-sided), wilcoxon_p, ttest_p,
-    dz (paired Cohen's d) and Holm-adjusted p for the three tests.
+    dz (paired Cohen's d) and Holm-adjusted p for the three tests. `pairs` selects the model pairs
+    (default M1/M2/M3; ('JOINT', 'M2') etc. need `bic_JOINT` in the table, see `joint_comparison`).
     """
     rng = np.random.default_rng(seed)
     rows = []
-    for a, b in PAIRS:
+    for a, b in pairs:
         ca, cb = f"{metric}_{a}", f"{metric}_{b}"
         if ca not in table or cb not in table:
             continue
@@ -276,11 +279,12 @@ def cbf_fit_table(emp: pd.DataFrame, pred: pd.DataFrame, shapes: Optional[pd.Dat
     return out
 
 
-def cbf_model_tests(fit_table: pd.DataFrame, value: str = "rmse") -> pd.DataFrame:
+def cbf_model_tests(fit_table: pd.DataFrame, value: str = "rmse",
+                    pairs: Sequence[Tuple[str, str]] = PAIRS) -> pd.DataFrame:
     """Paired across-mouse Wilcoxon / t tests of the CBF discrepancy `value` for every model pair."""
     wide = fit_table.pivot(index="subject_id", columns="model", values=value)
     rows = []
-    for a, b in PAIRS:
+    for a, b in pairs:
         if a not in wide or b not in wide:
             continue
         diff = (wide[a] - wide[b]).to_numpy()
@@ -310,6 +314,28 @@ def concordance(table: pd.DataFrame, emp_shapes: pd.DataFrame, fit_table: pd.Dat
     fit_table = fit_table.reset_index(drop=True)
     closest = fit_table.loc[fit_table.groupby("subject_id")["rmse"].idxmin(), ["subject_id", "model"]].rename(columns={"model": "cbf_closest"})
     return out.merge(closest, on="subject_id", how="left")
+
+
+JOINT_PAIRS: Tuple[Tuple[str, str], ...] = (("JOINT", "M2"), ("JOINT", "M1"), ("JOINT", "M3"))
+
+
+def joint_comparison(best: pd.DataFrame, joint_best: pd.DataFrame, metric: str = "bic", rt_max: float = 2.5,
+                     bound: str = "fixed") -> pd.DataFrame:
+    """
+    Per-mouse comparison of the combined start-point + drift-bias model (JOINT, one extra parameter) with
+    M1/M2/M3: criterion of every model, JOINT minus each of the others (negative = JOINT better) and the
+    fitted z and v_b. Both inputs come from `collapse_replicates`.
+    """
+    both = pd.concat([best, joint_best], ignore_index=True)
+    d = both[(both["rt_max"] == rt_max) & (both["bound"] == bound)]
+    wide = d.pivot(index="subject_id", columns="model", values=metric).add_prefix(f"{metric}_")
+    for m in ("M1", "M2", "M3"):
+        wide[f"d{metric}_JOINT_vs_{m}"] = wide[f"{metric}_JOINT"] - wide[f"{metric}_{m}"]
+    jp = joint_best[(joint_best["rt_max"] == rt_max) & (joint_best["bound"] == bound)].set_index("subject_id")
+    for k in ("p_z", "p_v_b"):
+        wide[k] = jp[k]
+    wide["winner"] = wide[[f"{metric}_{m}" for m in ("M1", "M2", "M3", "JOINT")]].idxmin(axis=1).str.replace(f"{metric}_", "")
+    return wide.reset_index()
 
 
 def parameter_table(best: pd.DataFrame, rt_max: float = 2.5, bound: str = "fixed") -> pd.DataFrame:

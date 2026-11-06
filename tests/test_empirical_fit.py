@@ -18,7 +18,7 @@ from src.optimization.empirical import (
     fitted_params,
     simulate_from_fit,
 )
-from src.optimization.fit import DDMFitter, fit_ddm
+from src.optimization.fit import PARAM_SPECS, DDMFitter, fit_ddm
 
 # keeps every fit in this file to a couple of seconds
 TINY = dict(n_screen=2, n_starts=1, n_restarts=0, maxiter=15, n_sim_per_cond=60, n_sim_final=120)
@@ -112,3 +112,19 @@ def test_delta_bic_is_relative_to_the_reference_level():
     })
     d = delta_bic(res, by="bound", reference="fixed").set_index("subject_id")["delta_bic"]
     assert d["a"] == -10.0 and d["b"] == 20.0
+
+
+def test_bounds_override_is_per_fit_and_validated():
+    f = DDMFitter("M2", fit_variability=True, param_bounds={"t0": (0.02, 0.6), "s_z": (0.0, 1.0)})
+    b = dict(zip(f.param_names, f._bounds().tolist()))
+    assert b["t0"] == [0.02, 0.6] and b["s_z"] == [0.0, 1.0]
+    default = DDMFitter("M2", fit_variability=True)
+    assert default._bounds().tolist() == [list(PARAM_SPECS[p]["bounds"]) for p in default.param_names]
+    assert f._compute_penalty(f._pack_params({"t0": 0.03})) == 0.0          # inside the widened range, outside the default
+    with pytest.raises(ValueError, match="bounds"):
+        DDMFitter("M2", param_bounds={"t0": (0.5, 0.1)})
+    with pytest.raises(ValueError, match="bounds"):
+        DDMFitter("M2", param_bounds={"nonsense": (0.0, 1.0)})
+    sim = simulate_ddm({"a": 1.2, "t0": 0.2, "k": 3.0, "v_b": 0.4}, "M2", n_trials=500, seed=8)
+    res = fit_ddm(sim, "M2", param_bounds={"t0": (0.02, 0.6)}, **TINY)
+    assert 0.02 <= res["params"]["t0"] <= 0.6

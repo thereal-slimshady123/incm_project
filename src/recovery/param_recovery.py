@@ -82,6 +82,38 @@ def summarize_recovery(df_results: pd.DataFrame, r_threshold: float = 0.8) -> pd
     return pd.DataFrame(rows)
 
 
+def _read_partial(path: str, key: str) -> pd.DataFrame:
+    """Rows saved by an earlier, interrupted run (empty frame if none)."""
+    return pd.read_csv(path) if os.path.exists(path) else pd.DataFrame(columns=[key])
+
+
+def _write_atomic(frame: pd.DataFrame, path: str) -> None:
+    tmp = path + ".tmp"
+    frame.to_csv(tmp, index=False)
+    os.replace(tmp, path)
+
+
+def run_tasks_resumable(tasks, worker, n_jobs: int, partial_path: str, key: str = "sim_idx") -> pd.DataFrame:
+    """
+    Run `worker(*task)` for every task in parallel and checkpoint each finished result to
+    `partial_path` (CSV), so a plan-scale run of several hours survives a suspend or crash.
+    Tasks are identified by their first element (the `key` column of the worker's record); tasks already
+    present in `partial_path` are skipped. Task lists are deterministic given the master seed, so a
+    resumed run reproduces exactly the run that was interrupted.
+    """
+    done = _read_partial(partial_path, key)
+    todo = [t for t in tasks if t[0] not in set(done[key])]
+    rows = done.to_dict("records")
+    if len(done):
+        print(f"Resuming: {len(done)} of {len(tasks)} jobs already finished in {partial_path}")
+    if todo:
+        stream = Parallel(n_jobs=n_jobs, verbose=5, return_as="generator_unordered")(delayed(worker)(*t) for t in todo)
+        for rec in stream:
+            rows.append(rec)
+            _write_atomic(pd.DataFrame(rows), partial_path)
+    return pd.DataFrame(rows).sort_values(key).reset_index(drop=True)
+
+
 def _run_single_recovery_step(
     sim_idx: int,
     true_params: Dict[str, float],
@@ -174,15 +206,14 @@ def run_parameter_recovery(
             task_idx += 1
 
     print(f"Dispatching {len(all_tasks)} optimization jobs across {n_jobs} workers...")
-    results = Parallel(n_jobs=n_jobs, verbose=5)(
-        delayed(_run_single_recovery_step)(*task) for task in all_tasks
-    )
+    partial = os.path.join(output_dir, f"param_recovery_{model_type}.partial.csv")
+    df_results = run_tasks_resumable(all_tasks, _run_single_recovery_step, n_jobs, partial)
 
-    df_results = pd.DataFrame(results)
-
-    # Save CSV
+    # Save CSV (the checkpoint file is no longer needed once the run is complete)
     csv_path = os.path.join(output_dir, f"param_recovery_{model_type}.csv")
     df_results.to_csv(csv_path, index=False)
+    if os.path.exists(partial):
+        os.remove(partial)
     print(f"Saved parameter recovery data to: {csv_path}")
 
     summary = summarize_recovery(df_results)

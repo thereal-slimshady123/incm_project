@@ -15,6 +15,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import pearsonr, linregress
 
+from ..empirical.cbf import cbf_curve
+
 
 # Set clean, publication-grade matplotlib style
 plt.rcParams.update({
@@ -222,35 +224,18 @@ def plot_model_recovery_confusion(
 
 def compute_cbf_curve(trials_df: pd.DataFrame, n_bins: int = 5) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Calculate the Conditional Bias Function (CBF; White & Poldrack, 2014):
+    Conditional Bias Function (CBF; White & Poldrack, 2014):
         Delta P(Right) = P(Right | Prior Right) - P(Right | Prior Left)
-    evaluated across RT quantiles.
+    evaluated across RT quantile bins; returns (median RT per bin, CBF per bin).
+
+    Uses the contrast-STRATIFIED estimator of `src.empirical.cbf` (ambiguous stimuli, |contrast| <= 0.125):
+    in the IBL task, and in `simulate_ddm`, the stimulus side is correlated with the block, so the raw
+    difference of choice rates would also contain the stimulus statistics, not only the prior's effect.
     """
-    # Use zero or ambiguous contrasts for purest prior bias measurement
-    sub = trials_df[np.abs(trials_df["contrast"]) <= 0.125].copy()
-    if len(sub) < 30:
-        sub = trials_df.copy()
-
-    # Determine RT bins across all qualifying trials
-    quantiles = np.linspace(0, 1, n_bins + 1)
-    bin_edges = np.quantile(sub["rt"].values, quantiles)
-    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-
-    cbf_values = []
-    for i in range(n_bins):
-        low, high = bin_edges[i], bin_edges[i + 1]
-        in_bin = sub[(sub["rt"] >= low) & (sub["rt"] <= high)]
-
-        right_prior = in_bin[in_bin["prior"] > 0]
-        left_prior = in_bin[in_bin["prior"] < 0]
-
-        p_right_given_rp = np.mean(right_prior["choice"] == 1) if len(right_prior) > 0 else np.nan
-        p_right_given_lp = np.mean(left_prior["choice"] == 1) if len(left_prior) > 0 else np.nan
-
-        delta_p = p_right_given_rp - p_right_given_lp
-        cbf_values.append(delta_p)
-
-    return bin_centers, np.array(cbf_values)
+    try:
+        return cbf_curve(trials_df, n_bins=n_bins)
+    except ValueError:      # too few ambiguous trials: fall back to every contrast (still stratified)
+        return cbf_curve(trials_df, n_bins=n_bins, max_abs_contrast=1.0)
 
 
 def plot_cbf(

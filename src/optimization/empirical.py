@@ -37,6 +37,10 @@ EMPIRICAL_FIT_DEFAULTS: Dict[str, object] = {
     "n_restarts": 3,
 }
 
+# Search bounds that are NOT binding for real mice: with the defaults (t0 >= 0.08 s, s_z <= 0.6) fits sit on
+# the bounds and improve by 60-770 BIC when they are relaxed. Passed as `bounds=` for the C1/C2 sensitivity runs.
+WIDE_BOUNDS = {"t0": (0.02, 0.6), "s_z": (0.0, 1.2)}
+
 RESULT_KEYS = ("subject_id", "model", "bound", "rt_max")
 FIT_SEED_DEFAULT = 12345      # fit_ddm's default CRN / Latin-hypercube seed, recorded in every result row
 

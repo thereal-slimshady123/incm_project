@@ -17,7 +17,7 @@ from joblib import Parallel, delayed
 
 from ..models.simulator import simulate_ddm
 from ..optimization.fit import fit_ddm
-from .param_recovery import sample_random_parameters
+from .param_recovery import run_tasks_resumable, sample_random_parameters
 from ..visualization.plots_recovery import plot_model_recovery_confusion
 
 
@@ -132,15 +132,14 @@ def run_model_recovery(
             task_idx += 1
 
     print(f"Dispatching {len(all_tasks)} model recovery jobs across {n_jobs} workers...")
-    results = Parallel(n_jobs=n_jobs, verbose=5)(
-        delayed(_run_single_model_recovery_step)(*task) for task in all_tasks
-    )
+    partial = os.path.join(output_dir, "model_recovery_bics.partial.csv")
+    df_results = run_tasks_resumable(all_tasks, _run_single_model_recovery_step, n_jobs, partial)
 
-    df_results = pd.DataFrame(results)
-
-    # Save CSV
+    # Save CSV (the checkpoint file is no longer needed once the run is complete)
     csv_path = os.path.join(output_dir, "model_recovery_bics.csv")
     df_results.to_csv(csv_path, index=False)
+    if os.path.exists(partial):
+        os.remove(partial)
     print(f"Saved model recovery data to: {csv_path}")
 
     # Build confusion matrix counts

@@ -12,7 +12,7 @@ import pandas as pd
 from ..optimization.c1 import MODEL_LABELS, MODELS
 from .plots_behavior import _RC, _finish, _grid
 
-MODEL_COLORS = {"M1": "#1f77b4", "M2": "#2ca02c", "M3": "#d62728"}   # same order as plot_cbf_cohort overlays
+MODEL_COLORS = {"M1": "#1f77b4", "M2": "#2ca02c", "M3": "#d62728", "JOINT": "#9467bd"}   # same order as plot_cbf_cohort overlays
 EMP_COLOR = "#111111"
 
 
@@ -69,6 +69,7 @@ def plot_cbf_overlay_cohort(
     save_path: Optional[str] = None,
     title: str = "C1: model-predicted vs empirical CBF",
     exclude: Optional[Sequence[str]] = None,
+    models: Sequence[str] = MODELS,
 ) -> plt.Figure:
     """
     Four panels over RT quantile bins: all three model predictions with the empirical cohort CBF, then
@@ -80,15 +81,15 @@ def plot_cbf_overlay_cohort(
     e = _cohort_mean(emp)
     n_subj = emp["subject_id"].nunique()
     with plt.rc_context(_RC):
-        fig, axes = plt.subplots(1, 4, figsize=(16, 4.0), sharey=True)
+        fig, axes = plt.subplots(1, len(models) + 1, figsize=(4.0 * (len(models) + 1), 4.0), sharey=True)
         ax = axes[0]
         ax.errorbar(e["bin"] + 1, e["mean"], yerr=e["sem"], color=EMP_COLOR, marker="D", ms=7, lw=2.4, capsize=3,
                     label=f"Mice (n={n_subj})", zorder=5)
-        for m in MODELS:
+        for m in models:
             pm = _cohort_mean(pred[pred["model"] == m])
             ax.plot(pm["bin"] + 1, pm["mean"], "--", marker="o", color=MODEL_COLORS[m], lw=1.8, label=MODEL_LABELS[m])
         ax.set_title("Cohort mean ± SEM")
-        for ax, m in zip(axes[1:], MODELS):
+        for ax, m in zip(axes[1:], models):
             for _, g in pred[pred["model"] == m].groupby("subject_id"):
                 ax.plot(g["bin"] + 1, g["cbf"], color=MODEL_COLORS[m], alpha=0.25, lw=1)
             pm = _cohort_mean(pred[pred["model"] == m])

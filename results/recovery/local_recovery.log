@@ -1,0 +1,144 @@
+=== Starting Model Recovery: Models=['M1', 'M2', 'M3'], N_datasets_per_model=50 ===
+Dispatching 150 model recovery jobs across 13 workers...
+[Parallel(n_jobs=13)]: Using backend LokyBackend with 13 concurrent workers.
+[Parallel(n_jobs=13)]: Done  46 tasks      | elapsed: 43.7min
+[Parallel(n_jobs=13)]: Done 150 out of 150 | elapsed: 121.0min finished
+Saved model recovery data to: results/recovery/model_recovery_bics.csv
+  P(fit=M1 | true=M1) = 94.00%
+  P(fit=M2 | true=M2) = 90.00%
+  P(fit=M3 | true=M3) = 68.00%
+  Overall accuracy = 84.00%
+=== Model Recovery Complete in 7263.7 s (121.06 min) ===
+=== Starting Parameter Recovery: Model=M1, N_sims=100, Trials=[200, 500, 1000, 2000] ===
+Dispatching 400 optimization jobs across 13 workers...
+[Parallel(n_jobs=13)]: Using backend LokyBackend with 13 concurrent workers.
+[Parallel(n_jobs=13)]: Done  46 tasks      | elapsed:  7.8min
+[Parallel(n_jobs=13)]: Done 136 tasks      | elapsed: 22.2min
+[Parallel(n_jobs=13)]: Done 262 tasks      | elapsed: 43.7min
+[Parallel(n_jobs=13)]: Done 400 out of 400 | elapsed: 70.0min finished
+Saved parameter recovery data to: results/recovery/param_recovery_M1.csv
+ n_trials param     r  rmse  slope  passes_r
+      200     a 0.951 0.108  0.964      True
+      200    t0 0.953 0.020  1.042      True
+      200     k 0.832 0.442  0.896      True
+      200   v_h 0.940 0.120  0.946      True
+      200     z 0.979 0.069  1.041      True
+      500     a 0.986 0.049  0.965      True
+      500    t0 0.989 0.009  0.989      True
+      500     k 0.966 0.216  0.955      True
+      500   v_h 0.965 0.087  0.952      True
+      500     z 0.991 0.044  1.016      True
+     1000     a 0.992 0.038  0.983      True
+     1000    t0 0.991 0.008  0.988      True
+     1000     k 0.978 0.187  0.947      True
+     1000   v_h 0.983 0.064  0.954      True
+     1000     z 0.994 0.030  0.995      True
+     2000     a 0.994 0.034  1.022      True
+     2000    t0 0.993 0.008  1.009      True
+     2000     k 0.983 0.166  1.006      True
+     2000   v_h 0.989 0.055  0.948      True
+     2000     z 0.998 0.020  1.022      True
+Saved recovery metrics to: results/recovery/param_recovery_M1_summary.csv
+=== Parameter Recovery Complete in 4211.8 s (70.20 min) ===
+=== Starting Parameter Recovery: Model=M2, N_sims=100, Trials=[200, 500, 1000, 2000] ===
+Dispatching 400 optimization jobs across 13 workers...
+[Parallel(n_jobs=13)]: Using backend LokyBackend with 13 concurrent workers.
+[Parallel(n_jobs=13)]: Done  46 tasks      | elapsed:  8.0min
+[Parallel(n_jobs=13)]: Done 136 tasks      | elapsed: 22.1min
+[Parallel(n_jobs=13)]: Done 262 tasks      | elapsed: 44.1min
+[Parallel(n_jobs=13)]: Done 400 out of 400 | elapsed: 69.9min finished
+Saved parameter recovery data to: results/recovery/param_recovery_M2.csv
+ n_trials param     r  rmse  slope  passes_r
+      200     a 0.963 0.093  0.968      True
+      200    t0 0.923 0.023  0.962      True
+      200     k 0.832 0.438  0.910      True
+      200   v_h 0.937 0.121  0.896      True
+      200   v_b 0.979 0.149  1.036      True
+      500     a 0.979 0.059  0.958      True
+      500    t0 0.972 0.014  0.993      True
+      500     k 0.928 0.319  0.954      True
+      500   v_h 0.958 0.095  0.962      True
+      500   v_b 0.991 0.099  0.963      True
+     1000     a 0.991 0.040  0.970      True
+     1000    t0 0.988 0.009  1.000      True
+     1000     k 0.972 0.199  0.961      True
+     1000   v_h 0.976 0.075  0.936      True
+     1000   v_b 0.995 0.068  0.980      True
+     2000     a 0.991 0.043  1.026      True
+     2000    t0 0.993 0.009  1.025      True
+     2000     k 0.976 0.183  0.987      True
+     2000   v_h 0.990 0.051  0.970      True
+     2000   v_b 0.997 0.059  0.959      True
+Saved recovery metrics to: results/recovery/param_recovery_M2_summary.csv
+=== Parameter Recovery Complete in 4205.4 s (70.09 min) ===
+=== Starting Parameter Recovery: Model=M3, N_sims=100, Trials=[200, 500, 1000, 2000] ===
+Dispatching 400 optimization jobs across 13 workers...
+[Parallel(n_jobs=13)]: Using backend LokyBackend with 13 concurrent workers.
+[Parallel(n_jobs=13)]: Done  46 tasks      | elapsed: 23.2min
+[Parallel(n_jobs=13)]: Done 136 tasks      | elapsed: 67.5min
+[Parallel(n_jobs=13)]: Done 262 tasks      | elapsed: 131.3min
+[Parallel(n_jobs=13)]: Done 400 out of 400 | elapsed: 207.8min finished
+Saved parameter recovery data to: results/recovery/param_recovery_M3.csv
+ n_trials param     r  rmse  slope  passes_r
+      200     a 0.960 0.088  0.943      True
+      200    t0 0.965 0.015  0.930      True
+      200     k 0.881 0.374  0.898      True
+      200   v_h 0.923 0.130  0.911      True
+      200 b_max 0.775 0.301  0.863     False
+      200 tau_b 0.145 0.326  0.197     False
+      500     a 0.978 0.063  1.013      True
+      500    t0 0.987 0.009  0.985      True
+      500     k 0.941 0.266  1.000      True
+      500   v_h 0.959 0.103  1.018      True
+      500 b_max 0.822 0.275  0.794      True
+      500 tau_b 0.118 0.312  0.144     False
+     1000     a 0.988 0.043  0.980      True
+     1000    t0 0.987 0.010  1.006      True
+     1000     k 0.971 0.199  0.963      True
+     1000   v_h 0.983 0.066  0.949      True
+     1000 b_max 0.872 0.217  0.928      True
+     1000 tau_b 0.229 0.289  0.332     False
+     2000     a 0.994 0.036  1.013      True
+     2000    t0 0.993 0.008  1.007      True
+     2000     k 0.982 0.171  0.990      True
+     2000   v_h 0.989 0.050  0.986      True
+     2000 b_max 0.850 0.223  0.882      True
+     2000 tau_b 0.322 0.280  0.448     False
+Saved recovery metrics to: results/recovery/param_recovery_M3_summary.csv
+=== Parameter Recovery Complete in 12480.6 s (208.01 min) ===
+=== Starting Parameter Recovery: Model=JOINT, N_sims=100, Trials=[200, 500, 1000, 2000] ===
+Dispatching 400 optimization jobs across 13 workers...
+[Parallel(n_jobs=13)]: Using backend LokyBackend with 13 concurrent workers.
+[Parallel(n_jobs=13)]: Done  46 tasks      | elapsed: 10.0min
+[Parallel(n_jobs=13)]: Done 136 tasks      | elapsed: 27.3min
+[Parallel(n_jobs=13)]: Done 262 tasks      | elapsed: 50.7min
+[Parallel(n_jobs=13)]: Done 400 out of 400 | elapsed: 78.3min finished
+Saved parameter recovery data to: results/recovery/param_recovery_JOINT.csv
+ n_trials param     r  rmse  slope  passes_r
+      200     a 0.925 0.116  0.860      True
+      200    t0 0.806 0.041  0.957      True
+      200     k 0.776 0.509  0.812     False
+      200   v_h 0.887 0.152  0.858      True
+      200     z 0.945 0.087  0.987      True
+      200   v_b 0.956 0.186  0.938      True
+      500     a 0.975 0.065  0.964      True
+      500    t0 0.987 0.010  0.996      True
+      500     k 0.937 0.265  0.924      True
+      500   v_h 0.971 0.084  1.000      True
+      500     z 0.978 0.058  1.017      True
+      500   v_b 0.983 0.113  0.931      True
+     1000     a 0.987 0.045  0.980      True
+     1000    t0 0.989 0.010  1.012      True
+     1000     k 0.962 0.232  0.956      True
+     1000   v_h 0.983 0.067  0.958      True
+     1000     z 0.985 0.041  1.013      True
+     1000   v_b 0.988 0.087  0.952      True
+     2000     a 0.991 0.041  1.001      True
+     2000    t0 0.973 0.015  0.973      True
+     2000     k 0.979 0.191  0.980      True
+     2000   v_h 0.984 0.061  0.971      True
+     2000     z 0.994 0.032  1.061      True
+     2000   v_b 0.993 0.071  0.955      True
+Saved recovery metrics to: results/recovery/param_recovery_JOINT_summary.csv
+=== Parameter Recovery Complete in 4701.4 s (78.36 min) ===
+ALL RECOVERY STAGES DONE

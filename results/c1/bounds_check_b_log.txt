@@ -1,0 +1,13 @@
+[Parallel(n_jobs=4)]: Using backend LokyBackend with 4 concurrent workers.
+[Parallel(n_jobs=4)]: Done   3 out of   8 | elapsed: 16.3min remaining: 27.2min
+[Parallel(n_jobs=4)]: Done   5 out of   8 | elapsed: 25.3min remaining: 15.2min
+[Parallel(n_jobs=4)]: Done   8 out of   8 | elapsed: 27.1min finished
+      subject_id model   seed  bic_default   bic_wide  dbic_wide_minus_default  wide_t0  p_t0  wide_s_z  p_s_z
+0         NYU-09    M1  12345     93856.47   93928.76                    72.28     0.16  0.13      1.11   0.00
+1         NYU-09    M1    777     93761.33   93625.29                  -136.04     0.13  0.13      0.69   0.48
+2         NYU-09    M2  12345     93956.55   93699.91                  -256.64     0.17  0.13      1.15   0.00
+3         NYU-09    M2    777     93637.99   93642.64                     4.65     0.15  0.13      1.10   0.50
+4  ibl_witten_13    M1  12345    171076.51  170653.15                  -423.36     0.18  0.17      1.16   0.57
+5  ibl_witten_13    M1    777    170613.01  170819.62                   206.61     0.17  0.16      0.93   0.59
+6  ibl_witten_13    M2  12345    169587.16  169439.48                  -147.67     0.17  0.16      1.20   0.60
+7  ibl_witten_13    M2    777    170241.49  170143.17                   -98.32     0.16  0.15      0.80   0.60

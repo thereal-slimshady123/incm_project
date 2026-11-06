@@ -81,6 +81,19 @@ Simulates 50 synthetic datasets per model under M1, M2, and M3, fits all competi
 python run_track_a.py --full-model-recovery --n-datasets 50
 ```
 
+### 5. Plan-scale recovery results (Week 2 deliverable, run in Week 3)
+`bash scripts/local_recovery.sh 13` runs everything above for M1, M2, M3 and JOINT on one workstation (same jobs as `scripts/ada_recovery.sbatch`;
+~80 CPU-hours, about 9 h wall-clock on a 20-thread / 7 GB laptop with 13 workers, checkpointed and resumable; every finished fit is stored in
+`results/recovery/*.partial.csv`). `python scripts/summarize_recovery.py` writes `results/recovery/recovery_report.md` (matrices, r / slope tables, error correlations);
+CSVs and figures are in `results/recovery/`. Results against the plan's criteria:
+- **Model recovery (150 datasets, N = 1000): criterion NOT met.** P(fit | true) = M1 94%, M2 90%, **M3 68%** (overall 84%; criterion > 85% for every mechanism).
+  All 16 M3 failures were won by M2, by 5.5 BIC on average (about the one-parameter BIC penalty at N = 1000), and they sit in weakly biased draws: recovery is 30-40% for b_max <= 0.8 but 87-93% above it.
+  So M3 is only identifiable when its bias is substantial, and at this size a weak M3 is indistinguishable from M2. (The real-data design with 6,000+ trials is easier: `results/recovery/empirical_model_recovery.csv`, 18/18.)
+- **Parameter recovery (100 vectors x N = 200/500/1000/2000):** every M1 and M2 parameter has r > 0.8 at every N (z: r >= 0.98, v_b: r >= 0.98), slopes 0.9-1.05.
+  JOINT passes except k at N = 200 (r = 0.78). M3: b_max reaches r = 0.82-0.87 for N >= 500 (0.78 at 200) but **tau_b is not recoverable (r = 0.12-0.32)**, which is why M3 profiles tau_b over a grid and counts it in BIC.
+- **Cross-talk:** z and v_b do not trade off when fitted separately, but **in the JOINT model their errors are strongly negatively correlated (-0.57 to -0.67 at every N)**, so z and v_b cannot be separated when both are free;
+  other trade-offs: a-k (M1, up to 0.57), a-t0 (M2, about -0.5), b_max-tau_b (M3, up to 0.80).
+
 ---
 
 ## Quickstart & Commands (Track B - Joshua Koilpillai)
@@ -175,9 +188,12 @@ won by the true model, but 4/18 by less than 10 BIC, all in the M2/M3 pair — s
 ```bash
 python run_c1.py fit                          # 10 mice x M1/M2/M3 x 2 seeds = 60 heavy fits, 12 workers: ~2 h awake (resumable)
 python run_c1.py fit --variant no_history --n-jobs 6   # sensitivity without the choice-history drift v_h: ~15 min
+python run_c1.py fit --variant wide_bounds --n-jobs 5  # sensitivity with relaxed t0 / s_z search bounds: 60 fits, ~5 h on 5 workers while sharing the CPU
+python run_c1.py fit --variant joint --n-jobs 5        # follow-up: combined z + v_b model, 20 fits: ~1.5 h on 5 workers
 python run_c1.py analyze                      # tables, tests, posterior-predictive CBFs, figures: ~30 s
 python run_c1.py smoke                        # tiny end-to-end check (3 mice, seconds)
 python scripts/check_m1_start_point.py        # M1 with z forced to 0.15/0.3/0.45 on two mice: ~12 min
+python scripts/check_param_bounds.py          # are fits limited by the t0 / s_z bounds? (2 mice x seeds, ~15 min)
 ```
 Outputs: `results/c1/c1_report.md` (all tables), `c1_bic_table.csv` (per-mouse BIC and ΔBIC vs M2), `c1_pairwise_tests.csv`
 (paired Wilcoxon / t / sign tests, bootstrap CI over mice, Holm-adjusted), `c1_subset_tests.csv` (without the lapse-affected mice
@@ -201,9 +217,13 @@ The predicted CBF replays each mouse's own trials 20 times through its fitted mo
 
 Robustness and caveats (report these alongside the result):
 - *Mis-specified mice.* Without KS019, KS021, CSH_ZAD_002 and NYU-01 (block-dependent lapses) the M1-vs-M2 effect has the same size (+372, CI 55 to 702) but with n = 6 the Wilcoxon test cannot go below p = 0.031 (Holm 0.09). Three of the four M3 winners are among these mice.
-- *All models under-predict the fastest RT bin* (cohort CBF in bin 1: data 0.347, M2 0.27, M3 0.17, M1 0.18). Something in the fastest responses is
-  prior-driven beyond what any single-route model captures; a combined start-point + drift model (`model_type='JOINT'` exists in the fitter) is the natural follow-up and was not run.
-- *Parameters on bounds:* `t0` at its lower bound (0.08 s) in 5/10 mice and `s_z` at its upper bound (0.6) in 4-5/10 for each model (`c1_params_at_bounds.csv`); these affect all models alike.
+- *All models under-predict the fastest RT bin* (cohort CBF in bin 1: data 0.347, M2 0.27, M3 0.17, M1 0.18). A combined start-point + drift model does not fix it:
+  JOINT (`run_c1.py fit --variant joint`) fits z = -0.14 to 0.02 in all 10 mice, has a worse BIC than M2 in 9/10 (mean +160) and a CBF no closer to the data (`c1_joint_*`).
+  Caveat: z and v_b trade off inside JOINT (error correlation about -0.6 in the recovery study), so this is evidence against an added start-point route, not a clean estimate of its size.
+- *Search bounds are binding.* With the default bounds (t0 >= 0.08 s, s_z <= 0.6) 5/10 mice sit on t0 and 4-5/10 on s_z. Relaxing them (t0 >= 0.02, s_z <= 1.2) typically improves BIC by 60-770 per fit (a few fits come out worse, which is search noise), and then
+  9/10 mice push s_z onto the NEW ceiling of 1.2 in every model: a start-point spread wider than the bounds produces fast responses at t0 = 0.10 s, i.e. the data want a **fast-guess component** that this model family lacks (like the lapses, a model-class limit).
+  The full refit with relaxed bounds (`c1_wide_bounds_*`, `results/figures/c1/c1_cbf_overlay_cohort_wide_bounds.png`) leaves the conclusions intact: M1 worse than M2 in 9/10 mice (mean ΔBIC +512, CI 227 to 836, Wilcoxon p = 0.004, Holm 0.012);
+  M3 vs M2 still null (mean -5, CI -181 to 124, p = 0.43); M2's CBF is closest to the data in 8/10 mice.
 - *Optimizer noise* is large (pooled SD ≈ 250 BIC) and was only reduced by two seeds; the group-level results are the reliable ones, per-mouse winners are not.
 - *Choice history.* Because the previous choice follows the block, v_h partly carries block information in every model; the no-history refit (`c1_no_history_*`) shows the ranking does not depend on it.
 - `SE` in the CBF discrepancy (`chi2_per_bin`) assumes independent trials and is descriptive only.

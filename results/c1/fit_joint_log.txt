@@ -1,0 +1,5 @@
+[Parallel(n_jobs=5)]: Using backend LokyBackend with 5 concurrent workers.
+[Parallel(n_jobs=5)]: Done   8 tasks      | elapsed: 36.9min
+[Parallel(n_jobs=5)]: Done  16 out of  20 | elapsed: 65.4min remaining: 16.3min
+[Parallel(n_jobs=5)]: Done  20 out of  20 | elapsed: 73.0min finished
+fits: 20 rows in results/c1/c1_fits_joint.csv (73.0 min this call)

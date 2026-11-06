@@ -89,6 +89,7 @@ class DDMFitter:
         fit_variability: bool = False,
         quantiles: Optional[Sequence[float]] = None,
         bias_type: Optional[str] = None,
+        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
     ):
         """
         Parameters
@@ -134,6 +135,9 @@ class DDMFitter:
         quantiles : sequence of float, optional
             QMP quantile cut points (default 0.1, 0.3, 0.5, 0.7, 0.9). Add e.g. 0.95 / 0.99
             to make the likelihood sensitive to the RT tail (the C2 urgency question).
+        param_bounds : dict, optional
+            Per-parameter (low, high) search bounds replacing the defaults in PARAM_SPECS for this fit,
+            e.g. {'t0': (0.02, 0.6), 's_z': (0.0, 1.0)} to check whether a fit is limited by its bounds.
         """
         self.model_type = model_type.upper()
         self.bound_type = bound_type.lower()
@@ -152,6 +156,11 @@ class DDMFitter:
         if bias_type not in (None, "drift", "start", "both"):
             raise ValueError("bias_type must be None, 'drift', 'start' or 'both'")
         self.bias_type = bias_type
+        self.bounds_map = {p: tuple(PARAM_SPECS[p]["bounds"]) for p in PARAM_SPECS}
+        for name, (lo, hi) in (param_bounds or {}).items():
+            if name not in PARAM_SPECS or not lo < hi:
+                raise ValueError(f"invalid bounds override for '{name}': {(lo, hi)}")
+            self.bounds_map[name] = (float(lo), float(hi))
 
         self.param_names = [p for p in self._determine_param_names() if p not in self.fixed_params]
         self.simulator = DDMSimulator(dt=dt, t_max=t_max)
@@ -203,7 +212,7 @@ class DDMFitter:
         return params
 
     def _bounds(self) -> np.ndarray:
-        return np.array([PARAM_SPECS[p]["bounds"] for p in self.param_names])
+        return np.array([self.bounds_map[p] for p in self.param_names])
 
     def _clip_to_bounds(self, x: np.ndarray) -> np.ndarray:
         bounds = self._bounds()
@@ -215,7 +224,7 @@ class DDMFitter:
         """
         penalty = 0.0
         for p, val in zip(self.param_names, x):
-            low, high = PARAM_SPECS[p]["bounds"]
+            low, high = self.bounds_map[p]
             if val < low:
                 penalty += 1000.0 * (low - val) ** 2
             elif val > high:
@@ -228,7 +237,7 @@ class DDMFitter:
             vertex = center.copy()
             step = SIMPLEX_STEPS.get(p, 0.25)
             # Ensure vertex remains within bounds
-            low, high = PARAM_SPECS[p]["bounds"]
+            low, high = self.bounds_map[p]
             if vertex[idx] + step <= high:
                 vertex[idx] += step
             else:
@@ -404,6 +413,7 @@ def fit_ddm(
     quantiles: Optional[Sequence[float]] = None,
     fixed_params: Optional[Dict[str, float]] = None,
     bias_type: Optional[str] = None,
+    param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
 ) -> Dict[str, Any]:
     """
     Standard top-level functional API adhering to §3.2 Model API specification.
@@ -436,6 +446,7 @@ def fit_ddm(
             fit_variability=fit_variability,
             quantiles=quantiles,
             bias_type=bias_type,
+            param_bounds=param_bounds,
         )
 
     fit_kwargs = dict(

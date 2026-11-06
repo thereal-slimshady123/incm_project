@@ -221,3 +221,12 @@ def test_m3_profiles_tau_b_over_grid():
     # a, t0, k, v_h, b_max free + tau_b selected from the grid = 6 parameters
     n_trials = len(data)
     assert np.isclose(res["bic"], 2.0 * res["nll"] + 6 * np.log(n_trials))
+
+
+def test_demo_cbf_curve_is_contrast_stratified():
+    """simulate_ddm ties stimulus side to the block; the CBF used in the demo must not inherit that."""
+    from src.visualization.plots_recovery import compute_cbf_curve
+    # a model with NO prior mechanism: any raw choice difference between blocks is pure stimulus statistics
+    df = simulate_ddm({"a": 1.1, "t0": 0.2, "k": 2.6}, model_type="M2", n_trials=30000, seed=1)
+    _, vals = compute_cbf_curve(df)
+    assert np.all(np.abs(vals) < 0.08)
