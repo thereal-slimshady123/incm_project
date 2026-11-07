@@ -1,0 +1,40 @@
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[Parallel(n_jobs=12)]: Done   4 out of  12 | elapsed: 13.2min remaining: 26.5min
+[Parallel(n_jobs=12)]: Done   7 out of  12 | elapsed: 13.4min remaining:  9.5min
+[Parallel(n_jobs=12)]: Done  10 out of  12 | elapsed: 14.0min remaining:  2.8min
+[Parallel(n_jobs=12)]: Done  12 out of  12 | elapsed: 14.5min finished
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[Parallel(n_jobs=12)]: Done   4 out of  12 | elapsed: 14.6min remaining: 29.2min
+[Parallel(n_jobs=12)]: Done   7 out of  12 | elapsed: 15.5min remaining: 11.1min
+[Parallel(n_jobs=12)]: Done  10 out of  12 | elapsed: 16.7min remaining:  3.3min
+[Parallel(n_jobs=12)]: Done  12 out of  12 | elapsed: 17.1min finished
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[Parallel(n_jobs=12)]: Done   4 out of  12 | elapsed: 13.3min remaining: 26.6min
+[Parallel(n_jobs=12)]: Done   7 out of  12 | elapsed: 15.2min remaining: 10.8min
+[Parallel(n_jobs=12)]: Done  10 out of  12 | elapsed: 15.8min remaining:  3.2min
+[Parallel(n_jobs=12)]: Done  12 out of  12 | elapsed: 16.2min finished
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[Parallel(n_jobs=12)]: Done   4 out of  12 | elapsed: 15.6min remaining: 31.3min
+[Parallel(n_jobs=12)]: Done   7 out of  12 | elapsed: 17.6min remaining: 12.6min
+[Parallel(n_jobs=12)]: Done  10 out of  12 | elapsed: 17.6min remaining:  3.5min
+[Parallel(n_jobs=12)]: Done  12 out of  12 | elapsed: 18.4min finished
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[Parallel(n_jobs=12)]: Done   4 out of  12 | elapsed: 14.0min remaining: 27.9min
+[Parallel(n_jobs=12)]: Done   7 out of  12 | elapsed: 16.1min remaining: 11.5min
+[Parallel(n_jobs=12)]: Done  10 out of  12 | elapsed: 16.5min remaining:  3.3min
+[Parallel(n_jobs=12)]: Done  12 out of  12 | elapsed: 16.7min finished
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[Parallel(n_jobs=12)]: Done   4 out of  12 | elapsed: 16.4min remaining: 32.8min
+[Parallel(n_jobs=12)]: Done   7 out of  12 | elapsed: 18.3min remaining: 13.1min
+[Parallel(n_jobs=12)]: Done  10 out of  12 | elapsed: 19.0min remaining:  3.8min
+[Parallel(n_jobs=12)]: Done  12 out of  12 | elapsed: 19.2min finished
+            config             truth  n_datasets  n_weibull_wins  n_weibull_wins_by_10   mean_dbic  median_lam  median_frac_t1  median_frac_t2.5
+2.5s_c1_likelihood             fixed           4               1                     1   13.278537    2.726173        0.901628          0.437864
+2.5s_c1_likelihood fixed+slow_lapses           4               1                     1  -18.460327   11.238518        0.950988          0.727636
+2.5s_c1_likelihood           weibull           4               4                     4 -109.764999    2.509590        0.889491          0.371767
+    2.5s_truncated             fixed           4               2                     2    4.324375    5.348402        0.944859          0.697477
+    2.5s_truncated fixed+slow_lapses           4               3                     2  -17.784454    6.435496        0.940688          0.808804
+    2.5s_truncated           weibull           4               4                     4  -76.633979    3.406970        0.817876          0.463582
+    5.0s_truncated             fixed           4               1                     0    9.359272   14.349662        0.999829          0.994921
+    5.0s_truncated fixed+slow_lapses           4               0                     0   18.200346   19.759404        0.999982          0.999501
+    5.0s_truncated           weibull           4               4                     4 -103.800762    3.629514        0.855565          0.505900

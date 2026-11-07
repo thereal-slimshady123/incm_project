@@ -1,0 +1,37 @@
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[trunc_2p5] phase 1/2: fixed bound, models ('M2',)
+[Parallel(n_jobs=12)]: Done   2 out of  20 | elapsed:  7.7min remaining: 68.9min
+[Parallel(n_jobs=12)]: Done   7 out of  20 | elapsed: 15.1min remaining: 28.1min
+[Parallel(n_jobs=12)]: Done  12 out of  20 | elapsed: 19.0min remaining: 12.7min
+[Parallel(n_jobs=12)]: Done  17 out of  20 | elapsed: 24.5min remaining:  4.3min
+[Parallel(n_jobs=12)]: Done  20 out of  20 | elapsed: 25.0min finished
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[trunc_2p5] phase 2/2: Weibull bound, warm-started from the fixed fits
+[Parallel(n_jobs=12)]: Done   2 out of  20 | elapsed:  9.0min remaining: 80.8min
+[Parallel(n_jobs=12)]: Done   7 out of  20 | elapsed: 18.0min remaining: 33.4min
+[Parallel(n_jobs=12)]: Done  12 out of  20 | elapsed: 21.9min remaining: 14.6min
+[Parallel(n_jobs=12)]: Done  17 out of  20 | elapsed: 27.6min remaining:  4.9min
+[Parallel(n_jobs=12)]: Done  20 out of  20 | elapsed: 28.5min finished
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[trunc_2p5] 40 rows in results/c2/c2_fits_trunc_2p5.csv (53.5 min this call)
+[trunc_5p0] phase 1/2: fixed bound, models ('M2',)
+[Parallel(n_jobs=12)]: Done   2 out of  20 | elapsed:  7.4min remaining: 66.2min
+[Parallel(n_jobs=12)]: Done   7 out of  20 | elapsed: 18.7min remaining: 34.8min
+[Parallel(n_jobs=12)]: Done  12 out of  20 | elapsed: 22.5min remaining: 15.0min
+[Parallel(n_jobs=12)]: Done  17 out of  20 | elapsed: 28.6min remaining:  5.0min
+[Parallel(n_jobs=12)]: Done  20 out of  20 | elapsed: 30.4min finished
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[trunc_5p0] phase 2/2: Weibull bound, warm-started from the fixed fits
+[Parallel(n_jobs=12)]: Done   2 out of  20 | elapsed:  9.9min remaining: 89.3min
+[Parallel(n_jobs=12)]: Done   7 out of  20 | elapsed: 23.9min remaining: 44.4min
+[Parallel(n_jobs=12)]: Done  12 out of  20 | elapsed: 29.6min remaining: 19.7min
+[Parallel(n_jobs=12)]: Done  17 out of  20 | elapsed: 36.1min remaining:  6.4min
+[Parallel(n_jobs=12)]: Done  20 out of  20 | elapsed: 37.8min finished
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[trunc_5p0] 40 rows in results/c2/c2_fits_trunc_5p0.csv (68.2 min this call)
+seeded results/c2/c2_fits_c1like_2p5.csv with 60 fixed-bound fits from results/c1/c1_fits.csv
+[c1like_2p5] phase 1/2: fixed bound, models ('M1', 'M2', 'M3')
+[c1like_2p5] phase 2/2: Weibull bound, warm-started from the fixed fits
+[Parallel(n_jobs=12)]: Done  50 out of  60 | elapsed: 115.4min remaining: 23.1min
+[Parallel(n_jobs=12)]: Done  60 out of  60 | elapsed: 124.3min finished
+[c1like_2p5] 120 rows in results/c2/c2_fits_c1like_2p5.csv (124.4 min this call)

@@ -1,0 +1,20 @@
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[Parallel(n_jobs=12)]: Done   4 out of  12 | elapsed: 17.9min remaining: 35.8min
+[Parallel(n_jobs=12)]: Done   7 out of  12 | elapsed: 19.1min remaining: 13.6min
+[Parallel(n_jobs=12)]: Done  10 out of  12 | elapsed: 20.2min remaining:  4.0min
+[Parallel(n_jobs=12)]: Done  12 out of  12 | elapsed: 20.7min finished
+subject_id  lam       nll        bic  gamma     a  dnll_vs_fixed
+     KS019  1.0 98080.915 196267.248  1.067 1.548      11427.974
+     KS019  1.5 94027.104 188159.626  1.603 1.345       7374.163
+     KS019  2.0 90193.266 180491.951  3.415 1.318       3540.326
+     KS019  3.0 87301.318 174708.054  3.564 1.314        648.377
+     KS019  5.0 86617.573 173340.565  3.936 1.312        -35.368
+     KS019 10.0 86635.469 173376.356  3.457 1.320        -17.472
+     KS019  inf 86652.941 173400.758    NaN 1.311          0.000
+    NYU-09  1.0 64701.486 129503.933  1.000 2.245      12120.644
+    NYU-09  1.5 59176.927 118454.816  1.000 2.240       6596.086
+    NYU-09  2.0 57986.186 116073.333  1.510 1.978       5405.344
+    NYU-09  3.0 53999.613 108100.189  3.516 1.987       1418.772
+    NYU-09  5.0 52487.770 105076.501  3.948 1.814        -93.072
+    NYU-09 10.0 52539.930 105180.821  2.931 1.832        -40.912
+    NYU-09  inf 52580.841 105252.548    NaN 1.811          0.000

@@ -41,6 +41,17 @@ EMPIRICAL_FIT_DEFAULTS: Dict[str, object] = {
 # the bounds and improve by 60-770 BIC when they are relaxed. Passed as `bounds=` for the C1/C2 sensitivity runs.
 WIDE_BOUNDS = {"t0": (0.02, 0.6), "s_z": (0.0, 1.2)}
 
+# C2 (collapsing bounds). The default lam range (0.4, 3.5) cannot reproduce a fixed bound: even at lam = 3.5,
+# gamma = 4 the Weibull bound has fallen to 0.77 a at 2.5 s and 0.05 a at 5 s, so "fixed" would not be nested in
+# "Weibull". With lam up to 20 and gamma up to 4 the collapse is < 1% over 5 s, i.e. the fixed bound is the limit.
+COLLAPSE_BOUNDS = {"lam": (0.4, 20.0)}
+# Warm starts of a Weibull fit, each combined with the mouse's fixed-bound solution: the fixed-bound limit and two
+# genuinely collapsing bounds (a(t)/a = 0.64 / 0.43 at t = 1 s). Needed because the run-to-run noise of a
+# cold-started fit (SD ~250 BIC in C1) is larger than the effects C2 tests; with the fixed solution among the starts a
+# Weibull fit cannot do worse than its fixed-bound special case, up to the likelihood's Monte-Carlo noise.
+COLLAPSE_STARTS = ({"lam": 20.0, "gamma": 4.0}, {"lam": 2.5, "gamma": 2.0}, {"lam": 1.2, "gamma": 1.5})
+RT_MIN = 0.1       # the data's lower RT cutoff (= src.data.preprocess.RT_MIN, checked in tests/test_c2.py): lower edge of the truncation window
+
 RESULT_KEYS = ("subject_id", "model", "bound", "rt_max")
 FIT_SEED_DEFAULT = 12345      # fit_ddm's default CRN / Latin-hypercube seed, recorded in every result row
 
@@ -54,23 +65,36 @@ def fit_mouse(
     model_type: str,
     bound_type: str = "fixed",
     rt_max: float = 2.5,
+    truncate: bool = False,
+    rt_min: float = RT_MIN,
     **overrides,
 ) -> Dict[str, object]:
     """
     Fit ONE mouse's trials (a §3.1 table) with the empirical settings; returns the `fit_ddm`
     dict plus bookkeeping fields (n_trials, n_params). `overrides` replace any `fit_ddm`
     keyword (e.g. quantiles=(0.1, 0.3, 0.5, 0.7, 0.9, 0.97) to weight the RT tail).
+
+    `truncate=True` scores the model on its RT distribution CONDITIONAL on the data window
+    [rt_min, rt_max] (see `QMPDataset(window=...)`); the default reproduces the C1 likelihood.
+    For Weibull bounds the search range of `lam` is widened to `COLLAPSE_BOUNDS` unless overridden.
     """
     kwargs = {**EMPIRICAL_FIT_DEFAULTS, "t_max": float(rt_max), **overrides}
+    if truncate:
+        kwargs["rt_window"] = (float(rt_min), float(rt_max))
+    if bound_type.lower() in ("weibull", "collapsing"):
+        kwargs["param_bounds"] = {**COLLAPSE_BOUNDS, **(kwargs.get("param_bounds") or {})}
     res = fit_ddm(trials_df, model_type=model_type, bound_type=bound_type, **kwargs)
     n = len(trials_df)
+    if truncate:      # the likelihood (and so BIC's N) only counts trials inside the window
+        n = int(((trials_df["rt"] >= rt_min) & (trials_df["rt"] <= rt_max)).sum())
     res["n_trials"] = n
     res["n_params"] = int(round((res["bic"] - 2.0 * res["nll"]) / np.log(n)))
     return res
 
 
-def _flatten(subject: str, model: str, bound: str, rt_max: float, res: Dict[str, object], seed: int) -> Dict[str, object]:
-    row = {"subject_id": subject, "model": model, "bound": bound, "rt_max": rt_max, "seed": seed}
+def _flatten(subject: str, model: str, bound: str, rt_max: float, res: Dict[str, object], seed: int,
+             truncated: bool = False) -> Dict[str, object]:
+    row = {"subject_id": subject, "model": model, "bound": bound, "rt_max": rt_max, "seed": seed, "truncated": truncated}
     for key in ("n_trials", "n_params", "nll", "bic", "aic", "success", "nit", "nfev"):
         row[key] = res[key]
     for name, val in res["params"].items():
@@ -80,7 +104,8 @@ def _flatten(subject: str, model: str, bound: str, rt_max: float, res: Dict[str,
 
 def _job(subject: str, df_mouse: pd.DataFrame, model: str, bound: str, rt_max: float, overrides: dict):
     res = fit_mouse(df_mouse, model, bound, rt_max, **overrides)
-    return _flatten(subject, model, bound, rt_max, res, overrides.get("seed", FIT_SEED_DEFAULT))
+    return _flatten(subject, model, bound, rt_max, res, overrides.get("seed", FIT_SEED_DEFAULT),
+                    bool(overrides.get("truncate", False)))
 
 
 def fit_cohort(
@@ -92,6 +117,8 @@ def fit_cohort(
     cache_path: Optional[str] = None,
     subjects: Optional[Iterable[str]] = None,
     seeds: Optional[Sequence[int]] = None,
+    init_from: Optional[pd.DataFrame] = None,
+    init_extra: Optional[Sequence[Dict[str, float]]] = None,
     **overrides,
 ) -> pd.DataFrame:
     """
@@ -105,6 +132,11 @@ def fit_cohort(
     so an interrupted ~hour-long job resumes. Jobs are dispatched longest-first (M3 before M1/M2).
     Changing `overrides` between calls into the same cache is NOT detected: use a different
     `cache_path` for a different configuration.
+
+    `init_from` (a table of finished fits, e.g. the fixed-bound rows) warm-starts every task from the
+    fit of the same (mouse, model, rt_max, seed): the starting guess is that fit's parameters, once for
+    each dict in `init_extra` (e.g. `COLLAPSE_STARTS` adds lam / gamma for Weibull fits). Tasks without a
+    matching reference fit start as usual.
     """
     subs = list(subjects) if subjects is not None else sorted(cohort["subject_id"].unique())
     done = pd.read_csv(cache_path) if cache_path and os.path.exists(cache_path) else pd.DataFrame()
@@ -115,6 +147,7 @@ def fit_cohort(
     seed_list = [int(x) for x in seeds] if seeds is not None else [int(overrides.get("seed", FIT_SEED_DEFAULT))]
     overrides = {k: v for k, v in overrides.items() if k != "seed"}
 
+    starts = _warm_starts(init_from, init_extra, float(rt_max))
     tasks = []
     for s in subs:
         d = cohort[cohort["subject_id"] == s].reset_index(drop=True)
@@ -122,7 +155,8 @@ def fit_cohort(
             for b in bounds:
                 for sd in seed_list:
                     if (s, m, b, float(rt_max), sd) not in finished:
-                        tasks.append((s, d, m, b, float(rt_max), {**overrides, "seed": sd}))
+                        extra = {"init_params": starts[(s, m, sd)]} if (s, m, sd) in starts else {}
+                        tasks.append((s, d, m, b, float(rt_max), {**overrides, **extra, "seed": sd}))
     tasks.sort(key=lambda t: -_MODEL_COST.get(t[2].upper(), 1.0) * (1.15 if t[3] != "fixed" else 1.0))
 
     # Results are saved as each fit completes, so a killed run loses at most the fits in flight.
@@ -136,6 +170,23 @@ def fit_cohort(
             if cache_path:
                 _atomic_csv(pd.DataFrame(rows), cache_path)
     return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+def _warm_starts(init_from: Optional[pd.DataFrame], extras: Optional[Sequence[Dict[str, float]]],
+                 rt_max: float) -> Dict[tuple, List[Dict[str, float]]]:
+    """{(subject, model, seed): [guess, ...]} from reference fits at this cutoff (first row wins)."""
+    if init_from is None or not len(init_from):
+        return {}
+    ref = init_from[init_from["rt_max"].astype(float) == rt_max]
+    if "seed" not in ref.columns:
+        ref = ref.assign(seed=FIT_SEED_DEFAULT)
+    out: Dict[tuple, List[Dict[str, float]]] = {}
+    for _, r in ref.iterrows():
+        key = (r["subject_id"], r["model"], int(r["seed"]))
+        if key not in out:
+            base = fitted_params(r)
+            out[key] = [{**base, **e} for e in (extras or [{}])]
+    return out
 
 
 def _atomic_csv(frame: pd.DataFrame, path: str) -> None:

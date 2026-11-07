@@ -1,0 +1,2 @@
+pair,n_mice,mean_delta,median_delta,sum_delta,ci_lo,ci_hi,n_first_better,n_second_better,sign_p,wilcoxon_p,ttest_p,dz,sign_p_holm,wilcoxon_p_holm,ttest_p_holm,model
+weibull vs fixed,10,-94.49192424931024,3.2386965677142143,-944.9192424931025,-224.3350955725409,18.85390318079184,5,5,1.0,0.625,0.1857623370135381,-0.45304444725792126,1.0,0.625,0.1857623370135381,M2

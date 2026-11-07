@@ -1,0 +1,45 @@
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[trunc_2p5] phase 1/4: fixed bound, models ('M2',)
+[trunc_2p5] phase 2/4: Weibull bound, warm-started from the fixed fits
+[trunc_2p5] phase 3/4: polish the fixed fit from the Weibull solution
+[Parallel(n_jobs=12)]: Done   2 out of  20 | elapsed:  2.2min remaining: 19.4min
+[Parallel(n_jobs=12)]: Done   7 out of  20 | elapsed:  4.6min remaining:  8.6min
+[Parallel(n_jobs=12)]: Done  12 out of  20 | elapsed:  5.9min remaining:  3.9min
+[Parallel(n_jobs=12)]: Done  17 out of  20 | elapsed:  7.2min remaining:  1.3min
+[Parallel(n_jobs=12)]: Done  20 out of  20 | elapsed:  7.6min finished
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[Parallel(n_jobs=12)]: Done   2 out of  20 | elapsed:  4.9min remaining: 43.7min
+[Parallel(n_jobs=12)]: Done   7 out of  20 | elapsed: 10.4min remaining: 19.3min
+[Parallel(n_jobs=12)]: Done  12 out of  20 | elapsed: 13.5min remaining:  9.0min
+[Parallel(n_jobs=12)]: Done  17 out of  20 | elapsed: 82.6min remaining: 14.6min
+[Parallel(n_jobs=12)]: Done  20 out of  20 | elapsed: 83.6min finished
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[trunc_2p5] phase 4/4: polish the Weibull fit from the polished fixed solution
+[trunc_2p5] 80 rows in results/c2/c2_fits_trunc_2p5.csv (91.2 min this call)
+[trunc_5p0] phase 1/4: fixed bound, models ('M2',)
+[trunc_5p0] phase 2/4: Weibull bound, warm-started from the fixed fits
+[trunc_5p0] phase 3/4: polish the fixed fit from the Weibull solution
+[Parallel(n_jobs=12)]: Done   2 out of  20 | elapsed:  1.4min remaining: 12.4min
+[Parallel(n_jobs=12)]: Done   7 out of  20 | elapsed:  4.2min remaining:  7.7min
+[Parallel(n_jobs=12)]: Done  12 out of  20 | elapsed:  5.9min remaining:  4.0min
+[Parallel(n_jobs=12)]: Done  17 out of  20 | elapsed:  7.2min remaining:  1.3min
+[Parallel(n_jobs=12)]: Done  20 out of  20 | elapsed:  8.0min finished
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[Parallel(n_jobs=12)]: Done   2 out of  20 | elapsed:  6.0min remaining: 54.0min
+[Parallel(n_jobs=12)]: Done   7 out of  20 | elapsed: 13.8min remaining: 25.6min
+[Parallel(n_jobs=12)]: Done  12 out of  20 | elapsed: 16.9min remaining: 11.3min
+[Parallel(n_jobs=12)]: Done  17 out of  20 | elapsed: 20.7min remaining:  3.7min
+[Parallel(n_jobs=12)]: Done  20 out of  20 | elapsed: 21.9min finished
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[trunc_5p0] phase 4/4: polish the Weibull fit from the polished fixed solution
+[trunc_5p0] 80 rows in results/c2/c2_fits_trunc_5p0.csv (29.9 min this call)
+[c1like_2p5] phase 1/4: fixed bound, models ('M1', 'M2', 'M3')
+[c1like_2p5] phase 2/4: Weibull bound, warm-started from the fixed fits
+[c1like_2p5] phase 3/4: polish the fixed fit from the Weibull solution
+[Parallel(n_jobs=12)]: Done  50 out of  60 | elapsed: 29.6min remaining:  5.9min
+[Parallel(n_jobs=12)]: Done  60 out of  60 | elapsed: 31.7min finished
+[Parallel(n_jobs=12)]: Using backend LokyBackend with 12 concurrent workers.
+[Parallel(n_jobs=12)]: Done  50 out of  60 | elapsed: 69.7min remaining: 13.9min
+[Parallel(n_jobs=12)]: Done  60 out of  60 | elapsed: 75.0min finished
+[c1like_2p5] phase 4/4: polish the Weibull fit from the polished fixed solution
+[c1like_2p5] 240 rows in results/c2/c2_fits_c1like_2p5.csv (106.7 min this call)

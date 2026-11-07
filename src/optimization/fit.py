@@ -90,6 +90,7 @@ class DDMFitter:
         quantiles: Optional[Sequence[float]] = None,
         bias_type: Optional[str] = None,
         param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        rt_window: Optional[Tuple[float, float]] = None,
     ):
         """
         Parameters
@@ -138,6 +139,10 @@ class DDMFitter:
         param_bounds : dict, optional
             Per-parameter (low, high) search bounds replacing the defaults in PARAM_SPECS for this fit,
             e.g. {'t0': (0.02, 0.6), 's_z': (0.0, 1.0)} to check whether a fit is limited by its bounds.
+        rt_window : (rt_lo, rt_hi), optional
+            Truncation-aware likelihood (see `QMPDataset`): the data were filtered to this RT window, so
+            the model is scored on its RT distribution conditional on the window. None (default) = the
+            original behaviour used for C1, where mass beyond the cutoff falls into the last QMP bin.
         """
         self.model_type = model_type.upper()
         self.bound_type = bound_type.lower()
@@ -153,6 +158,7 @@ class DDMFitter:
         self.fit_beta = fit_beta
         self.fit_variability = fit_variability
         self.quantiles = tuple(quantiles) if quantiles is not None else None
+        self.rt_window = None if rt_window is None else (float(rt_window[0]), float(rt_window[1]))
         if bias_type not in (None, "drift", "start", "both"):
             raise ValueError("bias_type must be None, 'drift', 'start' or 'both'")
         self.bias_type = bias_type
@@ -272,7 +278,7 @@ class DDMFitter:
     def fit(
         self,
         trials_df: pd.DataFrame,
-        init_params: Optional[Dict[str, float]] = None,
+        init_params: Optional[Any] = None,
         maxiter: int = 400,
         tol: float = 0.5,
         xatol: float = 0.01,
@@ -291,8 +297,9 @@ class DDMFitter:
         ----------
         trials_df : pd.DataFrame
             Target trials DataFrame conforming to §3.1 contract.
-        init_params : dict, optional
-            Initial parameter guess.
+        init_params : dict or list of dict, optional
+            Initial parameter guess; a list gives several guesses, all screened with the Latin-hypercube
+            points (used to warm-start Weibull fits from the fixed-bound solution).
         maxiter : int
             Maximum iterations for each Nelder-Mead run.
         tol : float
@@ -316,7 +323,7 @@ class DDMFitter:
         # Condition on previous choice whenever v_h is fitted, so it is identifiable
         group_cols = ("contrast", "prior", "prev_choice") if self.fit_history else ("contrast", "prior")
         qmp_kwargs = {"quantiles": self.quantiles} if self.quantiles is not None else {}
-        qmp_data = QMPDataset(trials_df, group_cols=group_cols, **qmp_kwargs)
+        qmp_data = QMPDataset(trials_df, group_cols=group_cols, window=self.rt_window, **qmp_kwargs)
         n_total = float(qmp_data.total_trials)
         template = self._simulation_template(qmp_data, self.n_sim_per_cond)
         n_fev = [0]
@@ -348,8 +355,8 @@ class DDMFitter:
             )
 
         # Screen the initial guess plus Latin-hypercube points across the bounds
-        x0 = self._clip_to_bounds(self._pack_params(init_params or {}))
-        candidates = [x0]
+        guesses = init_params if isinstance(init_params, (list, tuple)) else [init_params or {}]
+        candidates = [self._clip_to_bounds(self._pack_params(g or {})) for g in guesses]
         if n_screen > 0:
             bounds = self._bounds()
             lhs = qmc.LatinHypercube(d=len(self.param_names), seed=self.crn_seed).random(n_screen)
@@ -396,7 +403,7 @@ def fit_ddm(
     model_type: str = "M2",
     bound_type: str = "fixed",
     fit_history: bool = True,
-    init_params: Optional[Dict[str, float]] = None,
+    init_params: Optional[Any] = None,
     maxiter: int = 400,
     n_sim_per_cond: int = 400,
     seed: int = 12345,
@@ -414,6 +421,7 @@ def fit_ddm(
     fixed_params: Optional[Dict[str, float]] = None,
     bias_type: Optional[str] = None,
     param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+    rt_window: Optional[Tuple[float, float]] = None,
 ) -> Dict[str, Any]:
     """
     Standard top-level functional API adhering to §3.2 Model API specification.
@@ -426,6 +434,8 @@ def fit_ddm(
     2.5 s cannot simulate the 5.0 s set), and `fit_beta=True, fit_variability=True,
     bias_type='drift'`.
     `bound_type` is 'fixed' or 'weibull' ('collapsing' is accepted as an alias).
+    `rt_window=(0.1, cutoff)` switches to the truncation-aware likelihood used for C2 (default None = C1).
+    `init_params` may be one dict or a list of dicts (several warm starts).
     """
     base_fixed = dict(fixed_params or {})
 
@@ -447,6 +457,7 @@ def fit_ddm(
             quantiles=quantiles,
             bias_type=bias_type,
             param_bounds=param_bounds,
+            rt_window=rt_window,
         )
 
     fit_kwargs = dict(

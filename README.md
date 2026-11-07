@@ -37,17 +37,20 @@ incm_project/
 │   ├── empirical/           # [Track B - Joshua] Empirical psychometrics, CBF, heterogeneity, mock data
 │   └── visualization/       # Plotting routines (plots_recovery: Track A; plots_behavior: Track B; plots_c1: C1 figures)
 ├── notebooks/               # [Track B] 02_track_b_empirical_baseline.ipynb (Week 2 deliverable)
-├── scripts/                 # Track A cluster job; build_empirical_notebook.py regenerates the notebook
+├── docs/DEVELOPER_GUIDE.md  # how everything is implemented, how to change it, where results live (start here when modifying code)
+├── scripts/                 # Track A cluster job; build_empirical_notebook.py regenerates the notebook; C1/C2 checks and drivers
 ├── tests/
 │   ├── test_data_contract.py# Schema validation & physical bounds
 │   ├── test_simulator.py    # DDM physics & loss surface tests
 │   ├── test_ibl_pipeline.py # [Track B] IBL preprocessing + processed-cohort contract tests
 │   ├── test_empirical.py    # [Track B] mock-data harness for the empirical tools
 │   ├── test_empirical_fit.py# Week 3: fitter extensions, shared cohort-fitting helpers
-│   └── test_c1.py           # Week 3: C1 tables, statistics and model-vs-data CBF
+│   ├── test_c1.py           # Week 3: C1 tables, statistics and model-vs-data CBF
+│   └── test_c2.py           # Week 3: truncation-aware likelihood, warm starts, RT-tail tools, C2 tables and statistics
 ├── run_track_a.py           # CLI benchmark harness for Track A
 ├── run_track_b.py           # CLI for Track B: data pipeline and empirical notebook
 ├── run_c1.py                # Week 3 C1 runner: fit M1/M2/M3 to the mice, tables, statistics, overlays
+├── run_c2.py                # Week 3 C2 runner: fixed vs Weibull bounds, invariance of C1, RT tail
 ├── plan.md                  # Detailed 2-person execution plan & interface contract
 └── proposal.md              # Original project proposal
 ```
@@ -149,10 +152,13 @@ pytest tests/test_empirical.py        # mock-data harness (known ground truth) +
 ```
 The notebook writes tables to `results/empirical/` and figures to `results/figures/empirical/`.
 
+For a full description of the code (and recipes for changing it) see [`docs/DEVELOPER_GUIDE.md`](docs/DEVELOPER_GUIDE.md).
+
 `src/empirical/` (all functions take any §3.1 DataFrame — IBL data, simulator output or mock data):
 - `psychometrics.py` — P(Right) tables with Wilson CIs, lapse-corrected logistic fits (γ = P(Right) for strongly left stimuli, λ = P(Left) for strongly right stimuli), block-prior shift with per-block lapses, chronometric / RT-quantile / conditional-accuracy tables
 - `cbf.py` — **contrast-stratified** Conditional Bias Function over RT quintiles, trial- or session-level (`cluster_col="session_eid"`) bootstrap CIs, slope and shape label (falling / flat / rising)
 - `heterogeneity.py` — one-row-per-mouse behavioural profile (incl. the prior's effect on each lapse and a within-block history effect), between-mouse summary and correlations
+- `tails.py` — model-free RT-tail diagnostics for C2 (survival, hazard, late/early hazard ratio, accuracy by RT window)
 - `mock.py` — synthetic §3.1 generator with known psychometric parameters, prior strength and falling / flat / rising bias, independent of the Track A simulator
 
 For Week 3 (Track A overlay): `cbf_curve(df)` is a drop-in for `compute_cbf_curve`; `compute_cbf(sim_df, bin_edges=...)`
@@ -227,6 +233,34 @@ Robustness and caveats (report these alongside the result):
 - *Optimizer noise* is large (pooled SD ≈ 250 BIC) and was only reduced by two seeds; the group-level results are the reliable ones, per-mouse winners are not.
 - *Choice history.* Because the previous choice follows the block, v_h partly carries block information in every model; the no-history refit (`c1_no_history_*`) shows the ranking does not depend on it.
 - `SE` in the CBF discrepancy (`chi2_per_bin`) assumes independent trials and is descriptive only.
+
+
+### 5. Week 3, C2: is there urgency (collapsing bounds), and does C1 survive it? (`run_c2.py`)
+```bash
+python run_c2.py fit                              # fixed + Weibull fits, 3 variants, warm starts + polish: ~8 h on 12 workers (resumable)
+python run_c2.py fit --variant tail_5p0           # sensitivity with a tail-weighted likelihood: ~1.7 h
+python scripts/validate_c2_recovery.py            # can the pipeline recover the true bound type? ~1.7 h
+python scripts/profile_collapse.py                # likelihood profile over the collapse latency: ~12 min
+python run_c2.py analyze                          # all tables, tests, tail analysis, figures: ~2.5 min
+python run_c2.py smoke                            # tiny end-to-end check (seconds)
+bash scripts/run_c2_all.sh 12                     # everything in order
+```
+Outputs: `results/c2/c2_report.md` (all tables), `results/c2/c2_*` (per-variant tables), `results/c2/validation/` (recovery), figures in `results/figures/c2/`.
+Code: `src/optimization/c2.py`, `src/empirical/tails.py`, `src/visualization/plots_c2.py`; design details, variants and how to change them: `docs/DEVELOPER_GUIDE.md` section 9.
+
+What was done differently from a naive "refit with a Weibull bound" (each point found by checking, details in the guide):
+- **Nesting.** Track A's default `lam` range (0.4-3.5) cannot reproduce a fixed bound; C2 fits use `lam` up to 20 so that fixed is the limit of Weibull, and every Weibull fit is warm-started from the fixed solution.
+- **Truncation-aware likelihood** (`fit_mouse(truncate=True)`, opt-in): 6-23% of responses are slower than 2.5 s and were removed, but the C1 likelihood still lumps simulated slow mass into the last bin (the fixed-bound fits predicted only 0.1-3% of RTs above 2.5 s), which biases towards collapse. The C2 model is scored conditional on the RT window.
+- **Polish pass** and replicate seeds, because the validation showed fixed and Weibull fits ending in optima up to 50 NLL apart in either direction.
+- **Validation on simulated data**: a true collapse is found in 12/12 datasets, but at the 2.5 s cutoff a fixed bound is called collapsing in 25-75% of datasets (also with disengaged-trial contamination); at 5.0 s no fixed-bound dataset was called collapsing by more than 10 BIC. Per-mouse 2.5 s collapse claims are therefore not reliable.
+
+**Result (10 mice, model M2; ΔBIC = Weibull − fixed, negative = collapsing better; no single mouse exceeds the noise threshold of 610-1270 BIC, so statements are group-level):**
+- **No evidence for urgency.** At the 5.0 s cutoff all 10 mice fit the fixed-bound limit (`lam` at its ceiling) and the fixed bound is preferred in 9/10 (mean ΔBIC +12 [3.5, 18], about the 2-parameter penalty; Wilcoxon p = 0.049). At 2.5 s the group mean is −10.6 (p = 1.0; 3 mice look collapsing, but see the validation) and with the C1 likelihood +14.4 (p = 0.08).
+  A tail-weighted likelihood (extra quantiles 0.95/0.99) lets 3 mice (CSHL046, CSH_ZAD_002, NYU-09) prefer a late, mild collapse (`lam` ≈ 5 s) but the group mean (−94 [−224, 19], p = 0.63) is not significant, three other mice show convergence failures, and the tail fit barely improves.
+  The profile likelihood rejects any collapse beginning before ~3 s (ΔNLL +650 to +12,000).
+- **The C1 conclusion is invariant to the bound.** Under Weibull bounds M1 is still worse than M2 (+322 BIC vs +318 under fixed; shift +3.6 BIC [−8, 21], ≈ 1% of the effect), M2 vs M3 is still not separable (−23 vs −22), per-mouse contrasts correlate at ρ = 0.93-0.96, and the model-predicted CBF is still closest to the data for M2. This is close to trivial because the Weibull fits sit at the fixed-bound limit.
+- **The RT tail argues against urgency.** The mice have a heavier slow tail than the fitted model (median 2.9× the predicted fraction of RTs > 2.5 s; 10/10 mice), a more strongly rising late hazard (10/10) and *higher* accuracy in slow responses (+17 points, 9/10), whereas urgency would lighten the tail and push late accuracy to chance. The Weibull model reproduces the tail no better than the fixed one. The extra slow, accurate responses suggest a slow/disengaged component the model class lacks (also relevant to the lapse-affected mice).
+- Caveats: optimizer noise (pooled SD 220-450 BIC per fit); 2.5 s per-mouse results unreliable; one lam-profile on two mice only; model class has no lapse/fast-guess/disengagement process.
 
 ---
 

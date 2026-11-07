@@ -24,6 +24,7 @@ class QMPDataset:
         quantiles: Tuple[float, ...] = (0.1, 0.3, 0.5, 0.7, 0.9),
         min_trials_per_choice: int = 4,
         group_cols: Tuple[str, ...] = ("contrast", "prior"),
+        window: Optional[Tuple[float, float]] = None,
     ):
         """
         Parameters
@@ -37,11 +38,25 @@ class QMPDataset:
         group_cols : tuple of str
             Columns defining a stimulus condition. Add 'prev_choice' when fitting
             the 1-back history weight v_h, so the likelihood depends on it.
+        window : (rt_lo, rt_hi), optional
+            Truncation-aware mode (used for C2). The data were filtered to rt_lo <= RT <= rt_hi, so the
+            model must predict the RT distribution CONDITIONAL on that window: bins become
+            [rt_lo, q1, ..., qk, rt_hi] and `compute_qmp_nll_blocks` renormalises the simulated bin
+            probabilities by the in-window mass of each condition. Without a window (the C1 behaviour),
+            the bins are [0, q1, ..., qk, inf) and simulated RTs slower than the cutoff all land in the
+            last bin, which forces a heavy-tailed model to squash its tail (see `src/optimization/c2.py`).
+            Trials outside the window are ignored.
         """
         self.quantiles = np.array(quantiles)
         self.n_bins = len(quantiles) + 1
         self.min_trials = min_trials_per_choice
         self.group_cols = list(group_cols)
+        self.window = None if window is None else (float(window[0]), float(window[1]))
+        if self.window is not None:
+            lo, hi = self.window
+            if not 0.0 <= lo < hi:
+                raise ValueError(f"invalid RT window {window}")
+            trials_df = trials_df[(trials_df["rt"] >= lo) & (trials_df["rt"] <= hi)]
         self.total_trials = len(trials_df)
 
         # Build condition tables
@@ -86,12 +101,17 @@ class QMPDataset:
                     # Fallback for very few trials
                     q_vals = np.linspace(np.min(rts), np.max(rts), len(self.quantiles))
 
-                # Bin edges: [0, q1, q2, q3, q4, q5, inf]
-                bin_edges = np.concatenate(([0.0], q_vals, [np.inf]))
+                # Bin edges: [0, q1, q2, q3, q4, q5, inf]  (windowed: [rt_lo, q1, ..., q5, rt_hi])
+                if self.window is None:
+                    bin_edges = np.concatenate(([0.0], q_vals, [np.inf]))
+                else:
+                    bin_edges = np.concatenate(([self.window[0]], q_vals, [self.window[1]]))
                 # Ensure strictly increasing edges to prevent histogram collapse
                 for i in range(1, len(bin_edges) - 1):
                     if bin_edges[i] <= bin_edges[i - 1]:
                         bin_edges[i] = bin_edges[i - 1] + 1e-4
+                if self.window is not None and bin_edges[-1] <= bin_edges[-2]:
+                    bin_edges[-1] = bin_edges[-2] + 1e-4
 
                 # Observed counts in each quantile bin
                 obs_counts, _ = np.histogram(rts, bins=bin_edges)
@@ -129,6 +149,8 @@ def compute_qmp_nll(
     g_squared : float
         Neyman / Pearson G^2 statistic.
     """
+    if qmp_data.window is not None:
+        raise NotImplementedError("compute_qmp_nll does not support windowed datasets; use compute_qmp_nll_blocks")
     total_nll = 0.0
     total_g2 = 0.0
 
@@ -209,6 +231,8 @@ def compute_qmp_nll_blocks(
         crosses a bin edge), which stalls Nelder-Mead on flat steps; the kernel makes
         the objective continuous. Keep it small relative to the bin widths.
     """
+    if qmp_data.window is not None:
+        return _qmp_nll_blocks_windowed(sim_choices, sim_rts, qmp_data, n_sim_per_cond, eps, bandwidth)
     if bandwidth:
         return _qmp_nll_blocks_smoothed(sim_choices, sim_rts, qmp_data, n_sim_per_cond, eps, bandwidth)
 
@@ -263,6 +287,58 @@ def _qmp_nll_blocks_smoothed(
                 pred_prob = np.maximum(bin_mass / float(n_sim_per_cond), eps)
             total_nll -= np.sum(target_info["observed_counts"] * np.log(pred_prob))
 
+    return float(total_nll)
+
+
+def _qmp_nll_blocks_windowed(
+    sim_choices: np.ndarray,
+    sim_rts: np.ndarray,
+    qmp_data: QMPDataset,
+    n_sim_per_cond: int,
+    eps: float,
+    bandwidth: Optional[float],
+) -> float:
+    """
+    Truncation-aware QMP NLL for a dataset built with `window=(rt_lo, rt_hi)`.
+
+    The observed counts are conditional on rt_lo <= RT <= rt_hi, so the model probability of
+    (choice, bin) is its simulated mass in that bin DIVIDED BY the simulated mass of the whole window
+    (both choices) in the same condition: P(choice, bin | RT in window). Simulated RTs outside the
+    window (anticipations below rt_lo, slow responses and timeouts above rt_hi) are removed from both
+    numerator and denominator, exactly as the data filter removed them. With a `bandwidth`, each
+    simulated RT is spread over the bins with a Gaussian kernel as in the unwindowed smoothed version.
+    """
+    lo, hi = qmp_data.window
+    total_nll = 0.0
+    for i, cond in enumerate(qmp_data.conditions):
+        block = slice(i * n_sim_per_cond, (i + 1) * n_sim_per_cond)
+        block_choices = sim_choices[block]
+        block_rts = sim_rts[block]
+
+        masses = {}
+        window_mass = 0.0
+        for choice_val in (-1, 1):
+            rts = block_rts[block_choices == choice_val]
+            info = cond["choices"][choice_val]
+            if bandwidth:
+                window_mass += float(np.sum(ndtr((hi - rts) / bandwidth) - ndtr((lo - rts) / bandwidth)))
+                if info["n_choice"] > 0 and len(rts):
+                    cdf = ndtr((info["bin_edges"][None, :] - rts[:, None]) / bandwidth)
+                    masses[choice_val] = np.diff(cdf, axis=1).sum(axis=0)
+            else:
+                inside = rts[(rts >= lo) & (rts <= hi)]
+                window_mass += float(len(inside))
+                if info["n_choice"] > 0 and len(inside):
+                    masses[choice_val] = np.histogram(inside, bins=info["bin_edges"])[0].astype(float)
+
+        denom = max(window_mass, 1e-9)
+        for choice_val in (-1, 1):
+            info = cond["choices"][choice_val]
+            if info["n_choice"] == 0:
+                continue
+            mass = masses.get(choice_val, np.zeros(qmp_data.n_bins))
+            pred_prob = np.maximum(mass / denom, eps)
+            total_nll -= np.sum(info["observed_counts"] * np.log(pred_prob))
     return float(total_nll)
 
 

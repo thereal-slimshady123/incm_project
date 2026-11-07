@@ -1,0 +1,3 @@
+bound,m1_rejected,m2_vs_m3,cbf_closest
+fixed,True,not separable,M2
+weibull,True,not separable,M2

@@ -1,0 +1,3 @@
+test,n_mice,mean,median,n_positive,wilcoxon_p
+"log hazard ratio (late/early) vs 0 [truncation-inflated, descriptive]",10,0.31358738753425,0.26144202471935907,10,0.001953125
+accuracy(<1 s) - accuracy(>2 s) vs 0,10,0.17778342780037654,0.1833083115612414,10,0.001953125

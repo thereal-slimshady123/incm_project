@@ -28,7 +28,20 @@ from .plots_c1 import (
     plot_cbf_slope_agreement,
 )
 
+from .plots_c2 import (
+    plot_bound_comparison,
+    plot_fitted_bounds,
+    plot_invariance,
+    plot_tail_by_mouse,
+    plot_tail_diagnostics,
+)
+
 __all__ = [
+    "plot_bound_comparison",
+    "plot_fitted_bounds",
+    "plot_invariance",
+    "plot_tail_by_mouse",
+    "plot_tail_diagnostics",
     "plot_delta_bic",
     "plot_cbf_overlay_cohort",
     "plot_cbf_overlay_by_mouse",
