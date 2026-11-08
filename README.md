@@ -46,7 +46,8 @@ incm_project/
 │   ├── test_empirical.py    # [Track B] mock-data harness for the empirical tools
 │   ├── test_empirical_fit.py# Week 3: fitter extensions, shared cohort-fitting helpers
 │   ├── test_c1.py           # Week 3: C1 tables, statistics and model-vs-data CBF
-│   └── test_c2.py           # Week 3: truncation-aware likelihood, warm starts, RT-tail tools, C2 tables and statistics
+│   ├── test_c2.py           # Week 3: truncation-aware likelihood, warm starts, RT-tail tools, C2 tables and statistics
+│   └── test_robust_c1.py    # Robust C1: inferred prior, lapse mixture, common-seed re-scoring, CBF-slope bootstrap
 ├── run_track_a.py           # CLI benchmark harness for Track A
 ├── run_track_b.py           # CLI for Track B: data pipeline and empirical notebook
 ├── run_c1.py                # Week 3 C1 runner: fit M1/M2/M3 to the mice, tables, statistics, overlays
@@ -227,7 +228,7 @@ Robustness and caveats (report these alongside the result):
   JOINT (`run_c1.py fit --variant joint`) fits z = -0.14 to 0.02 in all 10 mice, has a worse BIC than M2 in 9/10 (mean +160) and a CBF no closer to the data (`c1_joint_*`).
   Caveat: z and v_b trade off inside JOINT (error correlation about -0.6 in the recovery study), so this is evidence against an added start-point route, not a clean estimate of its size.
 - *Search bounds are binding.* With the default bounds (t0 >= 0.08 s, s_z <= 0.6) 5/10 mice sit on t0 and 4-5/10 on s_z. Relaxing them (t0 >= 0.02, s_z <= 1.2) typically improves BIC by 60-770 per fit (a few fits come out worse, which is search noise), and then
-  9/10 mice push s_z onto the NEW ceiling of 1.2 in every model: a start-point spread wider than the bounds produces fast responses at t0 = 0.10 s, i.e. the data want a **fast-guess component** that this model family lacks (like the lapses, a model-class limit).
+  s_z rises above 1.0 in most mice and reaches the NEW ceiling of 1.2 in 6/10 mice in at least one model (1/10 in all three; `c1_wide_bounds_parameters.csv`): a start-point spread wider than the bounds produces fast responses at t0 = 0.10 s, i.e. the data want a **fast-guess component** that this model family lacks (like the lapses, a model-class limit; tested directly by the `fastguess` variant, section 6).
   The full refit with relaxed bounds (`c1_wide_bounds_*`, `results/figures/c1/c1_cbf_overlay_cohort_wide_bounds.png`) leaves the conclusions intact: M1 worse than M2 in 9/10 mice (mean ΔBIC +512, CI 227 to 836, Wilcoxon p = 0.004, Holm 0.012);
   M3 vs M2 still null (mean -5, CI -181 to 124, p = 0.43); M2's CBF is closest to the data in 8/10 mice.
 - *Optimizer noise* is large (pooled SD ≈ 250 BIC) and was only reduced by two seeds; the group-level results are the reliable ones, per-mouse winners are not.
@@ -261,6 +262,110 @@ What was done differently from a naive "refit with a Weibull bound" (each point 
 - **The C1 conclusion is invariant to the bound.** Under Weibull bounds M1 is still worse than M2 (+322 BIC vs +318 under fixed; shift +3.6 BIC [−8, 21], ≈ 1% of the effect), M2 vs M3 is still not separable (−23 vs −22), per-mouse contrasts correlate at ρ = 0.93-0.96, and the model-predicted CBF is still closest to the data for M2. This is close to trivial because the Weibull fits sit at the fixed-bound limit.
 - **The RT tail argues against urgency.** The mice have a heavier slow tail than the fitted model (median 2.9× the predicted fraction of RTs > 2.5 s; 10/10 mice), a more strongly rising late hazard (10/10) and *higher* accuracy in slow responses (+17 points, 9/10), whereas urgency would lighten the tail and push late accuracy to chance. The Weibull model reproduces the tail no better than the fixed one. The extra slow, accurate responses suggest a slow/disengaged component the model class lacks (also relevant to the lapse-affected mice).
 - Caveats: optimizer noise (pooled SD 220-450 BIC per fit); 2.5 s per-mouse results unreliable; one lam-profile on two mice only; model class has no lapse/fast-guess/disengagement process.
+
+### 6. Robust C1 (v2): fixing the weak points of the Week 3 result
+The Week 3 C1 result has three weak points: the fits are noisy (pooled SD ≈ 250 BIC, so no mouse is decisive), the model class has no
+lapse / fast-guess process (four mice are mis-specified and `s_z` runs into its ceiling), and the prior covariate is the TRUE block label,
+which the mouse never sees. Robust C1 adds one fix per variant, so their effects can be told apart:
+
+| variant | adds | fits |
+|---|---|---|
+| `wide_bounds` (existing) | t0 ≥ 0.02 s, s_z ≤ 1.2 | 10 mice × 3 models × 2 seeds |
+| `lapse` | + lapse / contaminant mixture: rate `lapse`, P(Right \| lapse) = sigmoid(`lapse_side` + `lapse_prior` · prior), RT uniform on [0.1, 2.5] s (3 parameters, same for every model) | × 3 seeds |
+| `robust` | + **inferred prior**: the Bayes-optimal observer's belief about the block (`src/data/inferred_prior.py`), binned into 4 levels for the likelihood | × 3 seeds |
+
+Both new variants are then **re-scored** (`run_c1.py rescore`): every replicate of every model is evaluated once more with 4,000
+simulations per condition and the SAME seed, so models are compared on common random numbers. `analyze` adds a **calibrated CBF-slope
+test** for M2 vs M3 (a parametric bootstrap: 200 synthetic experiments of the mouse's own size per fitted model) and a model-free check of
+which prior covariate the choices follow. BIC is only comparable across models *within* a variant (the inferred-prior variant has more
+likelihood conditions).
+
+Already known without any new fits (`results/c1/c1_prior_covariate_comparison.csv` after `analyze`): in a logistic regression with
+the same number of parameters, **the inferred prior explains the choices better than the true block label in 10/10 mice** (log-likelihood
++21 to +362). The mice track the block the way an ideal observer would, lagging after each switch, so the true label mis-states their prior
+on exactly the trials that carry information about it.
+
+Cost on one 38-core Ada node (CPU only): `robust` 2 h 10 min, `lapse` 1 h 15 min, each including re-scoring and analysis.
+
+**Result (round 2; `results/c1/c1_report.md`, sections "Robust C1"):**
+- Run-to-run noise fell from SD ≈ 250 to 86 BIC (`robust`), so a per-mouse difference is decisive above 242 instead of 708.
+- **M1 is still rejected**: worse than M2 in 9/10 mice, mean ΔBIC +320 (CI 114 to 550), Wilcoxon Holm p = 0.018 (`lapse`: +237, Holm p = 0.012).
+- **M2 vs M3 is still not separable by BIC** (mean +5, p = 0.92; 4 vs 5 winners; KS019 decisively M3, ibl_witten_13 decisively M2).
+- **The calibrated CBF-slope test favours M2 over M3 in 10/10 mice** (summed log LR 363, Wilcoxon p = 0.002); M3's rising CBF is rejected in every mouse.
+  But the observed CBF falls more steeply than M2 predicts in 6/10 mice: M2 is far less wrong than M3, not a complete account (fast-guess test below).
+- Lapses are 9–11% of trials and are biased towards the block's side in every mouse (`lapse_prior` > 0 in all 30 `lapse` fits): the prior also enters guesses.
+
+#### Running it on Ada
+Copy the working tree from the laptop (Git Bash, from the folder that contains `incm_project/`; no commit needed;
+IIIT VPN required off campus; check that `incm_project.tgz` arrives at its full size, about 48 MB):
+```bash
+tar --exclude=incm_project/.git --exclude=incm_project/data/raw --exclude=__pycache__ --exclude=.pytest_cache -czf incm_project.tgz incm_project
+scp incm_project.tgz <user>@ada-gw1.iiit.ac.in:
+ssh <user>@ada-gw1.iiit.ac.in 'tar xzf incm_project.tgz && rm incm_project.tgz'
+```
+One-time Python setup. Build the environment ON A COMPUTE NODE: the gateway runs a different OS (system Python 3.9)
+from the u22 compute nodes, and an environment built on the gateway fails in jobs with `No module named 'numpy'`.
+```bash
+ssh <user>@ada-gw1.iiit.ac.in
+srun -A research --qos=medium -c 4 --mem-per-cpu=2G --time=01:00:00 --pty bash -l   # interactive compute node
+module load u22/python/3.12.4 && python3 --version                                    # must say 3.12.x
+rm -rf ~/incm_env && python3 -m venv ~/incm_env && source ~/incm_env/bin/activate
+pip install -r ~/incm_project/requirements.txt
+cd ~/incm_project && python -m pytest -q tests/test_robust_c1.py && exit
+```
+Submit (from the gateway). Ada caps a job at 38 CPUs, so ask for 38:
+```bash
+cd ~/incm_project && mkdir -p logs
+JOB=$(sbatch --parsable -c 38 --mem-per-cpu=1500M --export=ALL,VARIANT=robust scripts/ada_c1_robust.sbatch)
+sbatch -c 38 --mem-per-cpu=1500M --dependency=afterok:$JOB --export=ALL,VARIANT=lapse scripts/ada_c1_robust.sbatch   # ablation, after robust succeeds
+```
+Watching a run:
+```bash
+squeue -u $USER                       # state (PD pending / R running), elapsed time, node; the NODELIST(REASON) column says why it waits
+tail -f logs/c1_<id>.out              # live log: "[Parallel(n_jobs=40)]: Done N tasks | elapsed" lines, then "fits done", "rescore done", "ALL DONE"
+python scripts/c1_progress.py         # finished fits per variant, e.g. "robust  fits  37/90  [M1 12, M2 13, M3 12]  rescored 0/90"
+sacct -j <id> --format=JobID,State,Elapsed,MaxRSS,ExitCode    # after it ends: final state, run time, peak memory
+scancel <id>                          # stop it; resubmitting the same command resumes from the saved fits
+```
+If the job ends with `TIMEOUT` or is killed, submit it again: finished fits are in `results/c1/c1_fits_<variant>.csv` and are skipped.
+These two jobs are CPU-only; round 3 below runs the simulator on the node's GPUs.
+
+Fetch the results to the laptop (Git Bash, from `incm_project/`):
+```bash
+scp -r <user>@ada-gw1.iiit.ac.in:incm_project/results/c1 results/
+scp -r <user>@ada-gw1.iiit.ac.in:incm_project/results/figures/c1 results/figures/
+```
+Outputs: the `## Robust C1 (...)` sections and the prior-covariate table in `results/c1/c1_report.md`; per variant `c1_<variant>_bic_table.csv`,
+`_pairwise_tests.csv`, `_subset_tests.csv`, `_cbf_fit.csv`, `_cbf_slope_bootstrap.csv` / `_cbf_slope_lr.csv` (M2 vs M3), `_parameters.csv` (incl. lapse);
+figures `results/figures/c1/c1_<variant>_delta_bic.png`, `c1_cbf_overlay_cohort_<variant>.png`, `c1_cbf_overlay_by_mouse_<variant>.png`.
+
+#### Round 3: validation, fast guesses, replication, fairer M3 (GPU)
+| step | what it answers | code / output |
+|---|---|---|
+| model recovery | If a mouse really were M1 / M2 / M3 with the parameters we fitted, would the robust pipeline say so? (each mouse's own design, 90 fits) | `scripts/validate_robust_recovery.py` → `results/recovery/robust_model_recovery*.{csv,md}` |
+| `fastguess` | Do prior-biased anticipatory responses (RT uniform just above 0.1 s, choice biased by the prior; 3 parameters) explain the steeply falling CBF that M2 misses? | `run_c1.py --variant fastguess` → `c1_fastguess_*` |
+| replication | Do the conclusions hold in 10 NEW mice (next 10 in the same ranking, ≤ 2 new per lab)? | `run_track_b.py --replication` → `data/processed/replication/`; `results/c1_replication/` |
+| `robust_tau` | Was M3 handicapped by its 3-value tau_b grid? M3 refit with 7 values (a superset), merged with the robust fits as `robust_finetau` | `run_c1.py --variant robust_tau` → `c1_robust_finetau_*` |
+
+**GPU simulator.** `INCM_BACKEND=cuda` runs the Euler–Maruyama kernel on an NVIDIA GPU (`src/models/_kernel_cuda.py`, numba-cuda,
+float32, same random streams, so common random numbers still hold). One simulation of 33,600 trials: 7–17 ms on an RTX 4050 vs 230 ms on
+one CPU core; a pool of fit workers sharing the GPU ran 3× faster end to end with identical BIC. The CPU still computes the likelihood,
+so expect roughly a 2.5–3× speed-up per node, not 30×. Without a usable GPU the code falls back to the CPU.
+
+One-time GPU setup on Ada (on a GPU compute node, inside the existing environment):
+```bash
+srun -A research --qos=medium -c 4 --gres=gpu:1 --mem-per-cpu=2G --time=00:30:00 --pty bash -l
+module load u22/python/3.12.4 && source ~/incm_env/bin/activate && cd ~/incm_project
+nvidia-smi                                   # driver >= 525 for CUDA 12; otherwise install numba-cuda[cu11]
+pip install -r requirements-gpu.txt
+python -m pytest -q tests/test_robust_c1.py  # includes the GPU-vs-CPU test (skipped without a GPU)
+exit
+```
+Then, from the gateway: `mkdir -p logs && sbatch scripts/ada_round3.sbatch`. Each step resumes from saved fits; the log marks
+`=== STEP`, `=== DONE` / `=== FAILED` and ends with `ALL DONE` or the list of failed steps. Progress:
+`python scripts/c1_progress.py fastguess robust_tau` and `python scripts/c1_progress.py robust --out results/c1_replication`
+(both need the environment, so run them in an `srun` session), or `wc -l results/c1/c1_fits_fastguess.csv` on the gateway.
+Fetch: `results/c1`, `results/c1_replication`, `results/recovery`, `results/figures/c1`, `results/figures/c1_replication`.
 
 ---
 

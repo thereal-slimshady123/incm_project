@@ -11,6 +11,7 @@ Usage:
     python run_track_b.py --process             # build data/processed/ for the selected mice
     python run_track_b.py --empirical           # execute the Week 2 empirical baseline notebook
     python run_track_b.py --test                # run pytest suite
+    python run_track_b.py --replication         # replication cohort: next 10 ranked mice -> data/processed/replication/
 
 Add --reselect to rebuild the cohort ranking from scratch instead of keeping the cohort already
 stored in data/processed/mice_selection.csv, and --rt-source first_movement for the alternative
@@ -139,17 +140,11 @@ def step_select(data_dir: str, n_mice: int, reselect: bool = False):
     return mice, sessions
 
 
-def step_process(data_dir: str, cache_dir: str, n_mice: int, rt_source: str = DEFAULT_RT_SOURCE,
-                 reselect: bool = False):
-    p = _paths(data_dir)
-    mice, sessions = step_select(data_dir, n_mice, reselect)
-    subjects = mice.loc[mice["selected"], "subject"].tolist()
-    labs = dict(zip(mice["subject"], mice["lab"]))
-
-    print("\n[Step 4/4] Building processed cohort files...")
-    one = get_one(cache_dir)
-    loaded = load_selected_sessions(one, sessions, subjects)
-
+def build_cohort_files(loaded: dict, subjects: list, labs: dict, processed_dir: str, rt_source: str = DEFAULT_RT_SOURCE):
+    """
+    Parse the downloaded sessions of `subjects` and write the §3.1 cohort files (2.5 s and 5.0 s cutoffs, per-mouse
+    files, cohort_extended, manifest, summary) into `processed_dir`. Shared by the main cohort and the replication set.
+    """
     manifest_rows = []
     parsed: dict = {}
     for subj, items in loaded.items():
@@ -165,12 +160,13 @@ def step_process(data_dir: str, cache_dir: str, n_mice: int, rt_source: str = DE
                 "task_protocol": meta["task_protocol"], "n_raw_trials": len(raw),
                 "easy_accuracy": meta["easy_accuracy"],
             })
-    pd.DataFrame(manifest_rows).to_csv(p["manifest"], index=False)
+    os.makedirs(processed_dir, exist_ok=True)
+    pd.DataFrame(manifest_rows).to_csv(os.path.join(processed_dir, "session_manifest.csv"), index=False)
 
     summaries = []
     extended_all = None
     for tag, rt_max in (("2p5", RT_MAX_STANDARD), ("5p0", RT_MAX_EXTENDED)):
-        out_dir = os.path.join(p["processed"], f"rt_{tag}")
+        out_dir = os.path.join(processed_dir, f"rt_{tag}")
         os.makedirs(out_dir, exist_ok=True)
         tables, counts = [], {}
         for subj in subjects:
@@ -184,8 +180,8 @@ def step_process(data_dir: str, cache_dir: str, n_mice: int, rt_source: str = DE
         cohort_ext = pd.concat(tables, ignore_index=True)
         cohort = cohort_ext[CONTRACT_COLUMNS]
         validate_contract(cohort)
-        cohort.to_parquet(os.path.join(p["processed"], f"cohort_rt{tag}.parquet"), index=False)
-        cohort.to_csv(os.path.join(p["processed"], f"cohort_rt{tag}.csv"), index=False)
+        cohort.to_parquet(os.path.join(processed_dir, f"cohort_rt{tag}.parquet"), index=False)
+        cohort.to_csv(os.path.join(processed_dir, f"cohort_rt{tag}.csv"), index=False)
         n_sess = {s: len(parsed[s]) for s in subjects}
         summaries.append(summarize_cohort(cohort, counts, n_sess, labs, rt_max))
         if tag == "5p0":
@@ -193,11 +189,61 @@ def step_process(data_dir: str, cache_dir: str, n_mice: int, rt_source: str = DE
         print(f"  -> rt <= {rt_max}s: {len(cohort)} trials, {cohort['subject_id'].nunique()} mice")
 
     # parquet only: the extended table is Track B's own analysis input (the CSV copy was 17 MB)
-    extended_all.to_parquet(os.path.join(p["processed"], "cohort_extended.parquet"), index=False)
+    extended_all.to_parquet(os.path.join(processed_dir, "cohort_extended.parquet"), index=False)
     summary = pd.concat(summaries, ignore_index=True)
-    summary.to_csv(os.path.join(p["processed"], "summary_stats.csv"), index=False)
-    print(f"  -> summary statistics: {os.path.join(p['processed'], 'summary_stats.csv')}")
+    summary.to_csv(os.path.join(processed_dir, "summary_stats.csv"), index=False)
+    print(f"  -> summary statistics: {os.path.join(processed_dir, 'summary_stats.csv')}")
     return summary
+
+
+def step_process(data_dir: str, cache_dir: str, n_mice: int, rt_source: str = DEFAULT_RT_SOURCE,
+                 reselect: bool = False):
+    p = _paths(data_dir)
+    mice, sessions = step_select(data_dir, n_mice, reselect)
+    subjects = mice.loc[mice["selected"], "subject"].tolist()
+    labs = dict(zip(mice["subject"], mice["lab"]))
+
+    print("\n[Step 4/4] Building processed cohort files...")
+    one = get_one(cache_dir)
+    loaded = load_selected_sessions(one, sessions, subjects)
+
+    return build_cohort_files(loaded, subjects, labs, p["processed"], rt_source)
+
+
+REPLICATION_DIR = os.path.join("processed", "replication")
+
+
+def select_replication(mice: pd.DataFrame, frozen: list, n_mice: int = 10, max_per_lab: int = 2) -> list:
+    """
+    Replication cohort: the next `n_mice` qualifying mice in the SAME ranking that chose the original cohort
+    (total valid trials), skipping the frozen original mice, with at most `max_per_lab` new mice per lab.
+    Deterministic and decided before any of their data are fitted.
+    """
+    picked, per_lab = [], {}
+    for row in mice.itertuples():
+        if row.subject in frozen or len(picked) >= n_mice:
+            continue
+        if per_lab.get(row.lab, 0) < max_per_lab:
+            picked.append(row.subject)
+            per_lab[row.lab] = per_lab.get(row.lab, 0) + 1
+    return picked
+
+
+def step_replication(data_dir: str, cache_dir: str, n_mice: int = 10, rt_source: str = DEFAULT_RT_SOURCE):
+    """Download and build an independent replication cohort into data/processed/replication/ (original cohort untouched)."""
+    p = _paths(data_dir)
+    out_dir = os.path.join(data_dir, REPLICATION_DIR)
+    merged = _read_cached(p, "candidates").merge(_read_cached(p, "qc"), on="eid", how="inner")
+    mice, sessions = select_mice(merged, n_mice=n_mice)
+    frozen = pd.read_csv(p["mice"]).query("selected")["subject"].tolist()
+    subjects = select_replication(mice, frozen, n_mice)
+    labs = dict(zip(mice["subject"], mice["lab"]))
+    os.makedirs(out_dir, exist_ok=True)
+    mice.assign(selected=mice["subject"].isin(subjects)).to_csv(os.path.join(out_dir, "mice_selection.csv"), index=False)
+    print(f"[replication] {len(subjects)} mice: {subjects}")
+    one = get_one(cache_dir)
+    loaded = load_selected_sessions(one, sessions, subjects)
+    return build_cohort_files(loaded, subjects, labs, out_dir, rt_source)
 
 
 def step_empirical(timeout: int = 1800) -> str:
@@ -230,6 +276,8 @@ def main():
     parser.add_argument("--rt-source", choices=sorted(RT_SOURCES), default=DEFAULT_RT_SOURCE,
                         help="Definition of the contract `rt` column")
     parser.add_argument("--test", action="store_true", help="Run pytest unit test suite")
+    parser.add_argument("--replication", action="store_true",
+                        help="Build an independent replication cohort (next 10 ranked mice) in data/processed/replication/")
     parser.add_argument("--n-mice", type=int, default=10, help="Number of mice to select")
     parser.add_argument("--n-workers", type=int, default=6, help="Parallel download threads")
     parser.add_argument("--data-dir", type=str, default="data", help="Data directory")
@@ -250,6 +298,8 @@ def main():
         step_refresh_qc(args.data_dir, cache_dir)
     elif args.select:
         step_select(args.data_dir, args.n_mice, args.reselect)
+    elif args.replication:
+        step_replication(args.data_dir, cache_dir, args.n_mice, args.rt_source)
     elif args.process:
         step_process(args.data_dir, cache_dir, args.n_mice, args.rt_source, args.reselect)
     else:  # --all or no arguments

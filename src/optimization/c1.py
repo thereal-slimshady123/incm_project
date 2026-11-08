@@ -232,12 +232,14 @@ def predicted_cbf(
     bound: str = "fixed",
     seed: int = 0,
     emp: Optional[pd.DataFrame] = None,
+    prior_col: str = "prior",
 ) -> pd.DataFrame:
     """
     Posterior-predictive CBF of every fitted (mouse, model): the mouse's own trial covariates are
     replayed `n_rep` times through the fitted model and scored on the mouse's EMPIRICAL RT bin edges,
     so predicted and observed bins are directly comparable. Returns a long table
-    (subject_id, model, bin, rt_median, cbf, n_trials, n_sim).
+    (subject_id, model, bin, rt_median, cbf, n_trials, n_sim). `prior_col` is the prior covariate the
+    fits used (see `simulate_from_fit`); the CBF is always split by the true block.
     """
     emp = emp if emp is not None else empirical_cbf(cohort, n_bins, max_abs_contrast)
     rows = []
@@ -245,7 +247,7 @@ def predicted_cbf(
         subj, model = r["subject_id"], r["model"]
         edges = _edges(emp[emp["subject_id"] == subj].sort_values("bin"))
         trials = cohort[cohort["subject_id"] == subj]
-        sim = simulate_from_fit(trials, fitted_params(r), model, bound, rt_max, n_rep=n_rep, seed=seed)
+        sim = simulate_from_fit(trials, fitted_params(r), model, bound, rt_max, n_rep=n_rep, seed=seed, prior_col=prior_col)
         tab = compute_cbf(sim, n_bins=n_bins, max_abs_contrast=max_abs_contrast, bin_edges=edges)
         tab["subject_id"], tab["model"], tab["n_sim"] = subj, model, len(sim)
         rows.append(tab[["subject_id", "model", "bin", "rt_median", "cbf", "n_trials", "n_sim"]])
@@ -346,10 +348,11 @@ def parameter_table(best: pd.DataFrame, rt_max: float = 2.5, bound: str = "fixed
     return d[cols].sort_values(["subject_id", "model"]).reset_index(drop=True)
 
 
-def at_bound(best: pd.DataFrame, tol: float = 0.02) -> pd.DataFrame:
+def at_bound(best: pd.DataFrame, tol: float = 0.02, bounds: Optional[Dict[str, Tuple[float, float]]] = None) -> pd.DataFrame:
     """
     Parameters sitting at (within `tol` of the range of) their search bounds. Such fits are
     effectively constrained, and an M3 `b_max` at 0 or an `s_*` at 0 is informative, not a failure.
+    `bounds` overrides the default search bounds (pass the same `param_bounds` the fits used).
     """
     from .fit import PARAM_SPECS
     rows = []
@@ -357,9 +360,110 @@ def at_bound(best: pd.DataFrame, tol: float = 0.02) -> pd.DataFrame:
         for k, v in fitted_params(r).items():
             if k not in PARAM_SPECS or k == "tau_b":
                 continue
-            lo, hi = PARAM_SPECS[k]["bounds"]
+            lo, hi = (bounds or {}).get(k, PARAM_SPECS[k]["bounds"])
             w = hi - lo
             if v <= lo + tol * w or v >= hi - tol * w:
                 rows.append({"subject_id": r["subject_id"], "model": r["model"], "param": k, "value": v,
                              "bound": "lower" if v <= lo + tol * w else "upper"})
     return pd.DataFrame(rows, columns=["subject_id", "model", "param", "value", "bound"])
+
+
+# --------------------------------------------------------------------------------------------
+# Calibrated CBF-shape test (M2 vs M3) and the prior covariate
+# --------------------------------------------------------------------------------------------
+
+def cbf_slope_bootstrap(
+    cohort: pd.DataFrame,
+    best: pd.DataFrame,
+    models: Sequence[str] = ("M2", "M3"),
+    n_boot: int = 200,
+    n_bins: int = 5,
+    max_abs_contrast: float = DEFAULT_MAX_ABS_CONTRAST,
+    rt_max: float = 2.5,
+    bound: str = "fixed",
+    seed: int = 1,
+    emp: Optional[pd.DataFrame] = None,
+    prior_col: str = "prior",
+) -> pd.DataFrame:
+    """
+    Parametric bootstrap of the CBF slope: is the mouse's observed CBF slope what its fitted M2 (or M3) would
+    produce in an experiment of the same size?
+
+    For every (mouse, model) the mouse's own low-contrast trials (the only ones the CBF uses) are replayed
+    `n_boot` times through the fitted model; each replay is one synthetic data set of the real size, binned on
+    the mouse's empirical RT edges, giving the sampling distribution of the slope under that model. Returns one
+    row per (mouse, model): observed slope, the null mean / SD, a two-sided percentile p-value, and the Gaussian
+    log-likelihood of the observed slope. `loglik_M2 - loglik_M3` (see `cbf_slope_lr`) is a per-mouse evidence
+    measure calibrated for sampling noise. Parameter uncertainty is NOT included (the fitted values are treated
+    as known), so p-values are somewhat too small.
+    """
+    emp = emp if emp is not None else empirical_cbf(cohort, n_bins, max_abs_contrast)
+    rows = []
+    sel = best[(best["bound"] == bound) & (best["rt_max"] == rt_max) & (best["model"].isin(models))]
+    for _, r in sel.iterrows():
+        subj, model = r["subject_id"], r["model"]
+        e = emp[emp["subject_id"] == subj].sort_values("bin")
+        edges = _edges(e)
+        obs = cbf_slope(e["cbf"])
+        trials = cohort[(cohort["subject_id"] == subj) & (cohort["contrast"].abs() <= max_abs_contrast + 1e-9)]
+        sim = simulate_from_fit(trials, fitted_params(r), model, bound, rt_max, n_rep=n_boot, seed=seed, prior_col=prior_col)
+        slopes = np.array([cbf_slope(compute_cbf(g, n_bins=n_bins, max_abs_contrast=max_abs_contrast, bin_edges=edges)["cbf"])
+                           for _, g in sim.groupby("replay")])
+        slopes = slopes[np.isfinite(slopes)]
+        mu, sd = float(slopes.mean()), float(slopes.std(ddof=1))
+        p = 2.0 * min((slopes <= obs).mean(), (slopes >= obs).mean())
+        rows.append({"subject_id": subj, "model": model, "slope_obs": obs, "slope_null_mean": mu, "slope_null_sd": sd,
+                     "n_boot": len(slopes), "p_two_sided": float(min(1.0, max(p, 1.0 / len(slopes)))),
+                     "z": (obs - mu) / sd if sd > 0 else np.nan,
+                     "loglik": float(stats.norm.logpdf(obs, mu, sd)) if sd > 0 else np.nan})
+    return pd.DataFrame(rows)
+
+
+def cbf_slope_lr(boot: pd.DataFrame, a: str = "M2", b: str = "M3") -> Tuple[pd.DataFrame, Dict[str, float]]:
+    """
+    Per-mouse log-likelihood ratio of the observed CBF slope, model `a` vs `b` (positive favours `a`), and the
+    across-mouse summary (sum = log Bayes factor of the slope data, mean, mice favouring each model, Wilcoxon p).
+    """
+    w = boot.pivot(index="subject_id", columns="model", values="loglik")
+    lr = (w[a] - w[b]).rename("loglr").reset_index()
+    d = lr["loglr"].to_numpy()
+    try:
+        wp = float(stats.wilcoxon(d).pvalue)
+    except ValueError:
+        wp = float("nan")
+    summary = {"pair": f"{a} vs {b}", "n_mice": len(d), "sum_loglr": float(d.sum()), "mean_loglr": float(d.mean()),
+               f"n_favour_{a}": int((d > 0).sum()), f"n_favour_{b}": int((d < 0).sum()), "wilcoxon_p": wp}
+    return lr, summary
+
+
+def prior_covariate_comparison(cohort: pd.DataFrame, cols: Sequence[str] = ("prior", "prior_inferred")) -> pd.DataFrame:
+    """
+    Model-free check of which prior covariate the mice's CHOICES follow: per mouse, a logistic regression
+    P(Right) ~ contrast level (one coefficient per signed contrast) + previous choice + prior covariate,
+    fitted once with each column in `cols` (same number of parameters), compared by log-likelihood.
+    A higher log-likelihood for the inferred prior means the choices track the ideal observer's belief
+    (lagging after block switches) better than the true block label.
+    """
+    from scipy.optimize import minimize as _min
+
+    def nll_fit(X, y):
+        def f(b):
+            z = X @ b
+            return float(np.sum(np.logaddexp(0.0, z) - y * z)), X.T @ (1.0 / (1.0 + np.exp(-z)) - y)
+        r = _min(f, np.zeros(X.shape[1]), jac=True, method="L-BFGS-B")
+        return float(r.fun), r.x
+
+    rows = []
+    for s, g in cohort.groupby("subject_id", observed=True):
+        y = (g["choice"].to_numpy() > 0).astype(float)
+        levels = np.sort(g["contrast"].unique())
+        base = np.column_stack([(g["contrast"].to_numpy() == c).astype(float) for c in levels] + [g["prev_choice"].to_numpy(dtype=float)])
+        row = {"subject_id": s, "n_trials": len(g)}
+        for c in cols:
+            nll, b = nll_fit(np.column_stack([base, g[c].to_numpy(dtype=float)]), y)
+            row[f"loglik_{c}"], row[f"beta_{c}"] = -nll, float(b[-1])
+        rows.append(row)
+    out = pd.DataFrame(rows)
+    if len(cols) == 2:
+        out[f"dloglik_{cols[1]}_vs_{cols[0]}"] = out[f"loglik_{cols[1]}"] - out[f"loglik_{cols[0]}"]
+    return out

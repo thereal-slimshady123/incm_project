@@ -45,6 +45,7 @@ behaviour, and (Week 3) the C2 analysis. Parth was unavailable in Week 3, so Jos
 | 1 | simulator, boundaries | IBL ingestion, 10-mouse cohort | done |
 | 2 | QMP + Nelder-Mead, recovery code | psychometrics, chronometrics, CBF, heterogeneity, notebook | done; plan-scale recovery run in Week 3 |
 | 3 | C1: fit M1/M2/M3 to the mice | C2: fixed vs Weibull bounds, invariance, RT tail | done (sections 8 and 9) |
+| 3+ | robust C1 (v2): lapse mixture, inferred prior, 3 seeds, common-seed re-scoring, calibrated CBF test | | code done; Ada run pending (README section 6) |
 | 4 | publication figures, clean repo | report, posterior predictive checks (joint) | open |
 
 ---

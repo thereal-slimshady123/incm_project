@@ -293,7 +293,7 @@ variants, single-block tables, Track A simulator output and the real cohort, and
 """)
 code(r"""
 mc = make_mock_cohort(n_subjects=8, n_trials=10000, seed=21)
-truth = mc.attrs["truth"].set_index("subject_id")
+truth = mock_truth(mc).set_index("subject_id")
 mfit = fit_psychometric_by(mc).groupby("subject_id")[["sigma", "gamma", "lam"]].mean()
 mps = prior_shift(mc, n_boot=100).set_index("subject_id")
 rec = pd.DataFrame({"sigma_true": truth.sigma, "sigma_fit": mfit.sigma,

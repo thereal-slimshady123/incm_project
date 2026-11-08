@@ -1,0 +1,15 @@
+subject_id,model,param,value,bound
+CSHL045,M1,s_z,1.1990865799377175,upper
+CSHL045,M2,s_z,1.199933965881268,upper
+CSHL045,M3,s_z,1.2,upper
+CSHL046,M2,s_z,1.1998601479677606,upper
+CSHL046,M3,s_z,1.1882686154955493,upper
+KS021,M2,s_z,1.2,upper
+KS021,M3,s_z,1.2,upper
+KS021,M3,b_max,2.5,upper
+NYU-01,M3,s_z,1.1947678180464445,upper
+NYU-09,M3,s_z,1.1833511288098773,upper
+ZM_1743,M1,s_z,1.1999548780455918,upper
+ZM_1743,M2,s_z,1.199661523518814,upper
+ibl_witten_07,M2,s_z,1.2,upper
+ibl_witten_13,M1,s_z,0.004047109771340795,lower

@@ -126,5 +126,13 @@ def make_mock_cohort(
         ))
         truths.append({"subject_id": f"mock_{i + 1:03d}", **frames[-1].attrs["truth"]})
     cohort = pd.concat(frames, ignore_index=True)
-    cohort.attrs["truth"] = pd.DataFrame(truths)
+    # A list of records, not a DataFrame: pandas >= 2.2 compares `attrs` with == when it concatenates or prints
+    # derived frames, and a DataFrame there raises "truth value is ambiguous". Use `mock_truth(cohort)` for a table.
+    cohort.attrs["truth"] = truths
     return cohort
+
+
+def mock_truth(df: pd.DataFrame) -> pd.DataFrame:
+    """Ground-truth parameters of a mock table as a DataFrame (one row per mock mouse)."""
+    truth = df.attrs["truth"]
+    return pd.DataFrame(truth if isinstance(truth, list) else [truth])

@@ -11,6 +11,7 @@ Supports:
 - Standardized §3.1 Trial DataFrame output schema
 """
 
+import os
 from typing import Dict, Any, Optional, Union
 import numpy as np
 import pandas as pd
@@ -45,16 +46,24 @@ class DDMSimulator:
         sigma : float
             Diffusion noise scale (fixed to 1.0 for identifiability; Bogacz et al., 2006).
         backend : str, optional
-            'numba' (compiled per-trial loop) or 'numpy' (vectorized fallback).
-            Defaults to 'numba' when numba is installed.
+            'numba' (compiled per-trial loop on the CPU), 'cuda' (the same loop on an NVIDIA GPU, float32; needs
+            numba-cuda, see `_kernel_cuda`) or 'numpy' (vectorized fallback). Defaults to the environment variable
+            INCM_BACKEND if set, otherwise 'numba' when numba is installed.
         """
         self.dt = dt
         self.t_max = t_max
         self.sigma = sigma
         if backend is None:
-            backend = "numba" if HAVE_NUMBA else "numpy"
+            backend = os.environ.get("INCM_BACKEND") or ("numba" if HAVE_NUMBA else "numpy")
+        backend = backend.lower()
         if backend == "numba" and not HAVE_NUMBA:
             raise ImportError("backend='numba' requested but numba is not installed")
+        if backend == "cuda":
+            from ._kernel_cuda import HAVE_CUDA
+            if not HAVE_CUDA:
+                raise ImportError("backend='cuda' requested but numba-cuda or an NVIDIA GPU is not available")
+        elif backend not in ("numba", "numpy"):
+            raise ValueError(f"unknown backend '{backend}' (use 'numba', 'cuda' or 'numpy')")
         self.backend = backend
         self.n_steps = int(np.ceil(t_max / dt))
         # Time at the start of each Euler step (exact spacing dt)
@@ -198,7 +207,13 @@ class DDMSimulator:
         else:
             dynamic_factors = np.zeros(self.n_steps, dtype=np.float64)
 
-        if self.backend == "numba":
+        if self.backend == "cuda":
+            from ._kernel_cuda import simulate_kernel_cuda
+            choices, decision_time = simulate_kernel_cuda(
+                drift_rate, mean_x0, priors, stream_ids, int(rng.integers(0, 2**63 - 1)), s_v, s_z * a, 0.95 * a,
+                self.dt, self.sigma, self.t_max, upper_bounds, dynamic_factors,
+            )
+        elif self.backend == "numba":
             choices = np.zeros(n_trials, dtype=np.int8)
             decision_time = np.empty(n_trials, dtype=np.float64)
             simulate_kernel(

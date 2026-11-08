@@ -20,6 +20,7 @@ from src.data.preprocess import validate_contract
 from src.empirical import (
     accuracy_by_rt_bin,
     across_subject,
+    mock_truth,
     bootstrap_cbf,
     cbf_by_subject,
     cbf_curve,
@@ -253,7 +254,7 @@ def test_cohort_of_falling_mice_has_negative_mean_slope():
 # ---------------------------------------------------------------------------
 def test_mouse_profile_tracks_true_heterogeneity(mock_cohort):
     prof = mouse_profile(mock_cohort, n_boot=50).set_index("subject_id")
-    truth = mock_cohort.attrs["truth"].set_index("subject_id")
+    truth = mock_truth(mock_cohort).set_index("subject_id")
     for col in ("sigma", "prior_shift"):
         true_col = "sigma" if col == "sigma" else "shift"
         r = np.corrcoef(prof[col], truth.loc[prof.index, true_col])[0, 1]

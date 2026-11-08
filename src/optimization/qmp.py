@@ -209,6 +209,47 @@ def compute_qmp_nll(
     return float(total_nll), float(total_g2)
 
 
+class Lapse:
+    """
+    Lapse / contaminant mixture applied analytically to the QMP bin probabilities.
+
+    With probability `rate` a trial is not a diffusion decision: its choice is Right with probability
+    `p_right[i]` (one value per condition i of the dataset, so a lapse may depend on the block prior) and its
+    RT is uniform on `rt_range`. The predicted probability of (choice, RT bin) in condition i is then
+        (1 - rate) * P_ddm(choice, bin) + rate * P_lapse(choice) * |bin ∩ rt_range| / |rt_range|.
+    Because the uniform covers both fast and slow RTs, the same component also absorbs fast guesses and
+    slow disengaged responses that no diffusion process produces.
+
+    `extra` adds further components of the same form, as (rate, p_right, rt_range) tuples, e.g. a FAST-GUESS
+    component (anticipatory responses: RT uniform on a short window above the RT cutoff, choice biased by the
+    prior). The diffusion weight is then 1 - rate - sum of the extra rates.
+    """
+
+    def __init__(self, rate: float, p_right: np.ndarray, rt_range: Tuple[float, float], extra=None):
+        self.components = []
+        for r, pr, rng in [(rate, p_right, rt_range)] + list(extra or []):
+            lo, hi = float(rng[0]), float(rng[1])
+            if not hi > lo:
+                raise ValueError(f"invalid lapse RT range {rng}")
+            self.components.append((float(r), np.asarray(pr, dtype=float), lo, hi))
+        self.rate = sum(c[0] for c in self.components)
+        if self.rate > 1.0:
+            raise ValueError("mixture rates sum to more than 1")
+        self.p_right, self.lo, self.hi = self.components[0][1], self.components[0][2], self.components[0][3]
+
+    def mix(self, pred_prob: np.ndarray, cond_idx: int, choice_val: int, bin_edges: np.ndarray) -> np.ndarray:
+        if self.rate <= 0.0:
+            return pred_prob
+        out = (1.0 - self.rate) * pred_prob
+        for r, pr, lo, hi in self.components:
+            if r <= 0.0:
+                continue
+            width = np.clip(np.minimum(bin_edges[1:], hi) - np.maximum(bin_edges[:-1], lo), 0.0, None)
+            p_choice = pr[cond_idx] if choice_val > 0 else 1.0 - pr[cond_idx]
+            out = out + r * p_choice * width / (hi - lo)
+        return out
+
+
 def compute_qmp_nll_blocks(
     sim_choices: np.ndarray,
     sim_rts: np.ndarray,
@@ -216,6 +257,7 @@ def compute_qmp_nll_blocks(
     n_sim_per_cond: int,
     eps: float = 1e-5,
     bandwidth: Optional[float] = None,
+    lapse: Optional[Lapse] = None,
 ) -> float:
     """
     Fast QMP negative log-likelihood for simulations laid out in condition blocks.
@@ -230,11 +272,13 @@ def compute_qmp_nll_blocks(
         hard count is a step function of the parameters (nothing changes until an RT
         crosses a bin edge), which stalls Nelder-Mead on flat steps; the kernel makes
         the objective continuous. Keep it small relative to the bin widths.
+    lapse : Lapse, optional
+        Mixes a lapse / contaminant component into every bin probability (see `Lapse`). None = pure DDM.
     """
     if qmp_data.window is not None:
-        return _qmp_nll_blocks_windowed(sim_choices, sim_rts, qmp_data, n_sim_per_cond, eps, bandwidth)
+        return _qmp_nll_blocks_windowed(sim_choices, sim_rts, qmp_data, n_sim_per_cond, eps, bandwidth, lapse)
     if bandwidth:
-        return _qmp_nll_blocks_smoothed(sim_choices, sim_rts, qmp_data, n_sim_per_cond, eps, bandwidth)
+        return _qmp_nll_blocks_smoothed(sim_choices, sim_rts, qmp_data, n_sim_per_cond, eps, bandwidth, lapse)
 
     total_nll = 0.0
     for i, cond in enumerate(qmp_data.conditions):
@@ -251,7 +295,10 @@ def compute_qmp_nll_blocks(
             # Bin index per simulated RT; edges are [0, q1..q5, inf] so bins are 1..6
             bins = np.searchsorted(target_info["bin_edges"], rts, side="right") - 1
             sim_counts = np.bincount(bins, minlength=qmp_data.n_bins)[: qmp_data.n_bins]
-            pred_prob = np.maximum(sim_counts / float(n_sim_per_cond), eps)
+            pred_prob = sim_counts / float(n_sim_per_cond)
+            if lapse is not None:
+                pred_prob = lapse.mix(pred_prob, i, choice_val, target_info["bin_edges"])
+            pred_prob = np.maximum(pred_prob, eps)
             total_nll -= np.sum(target_info["observed_counts"] * np.log(pred_prob))
 
     return float(total_nll)
@@ -264,6 +311,7 @@ def _qmp_nll_blocks_smoothed(
     n_sim_per_cond: int,
     eps: float,
     bandwidth: float,
+    lapse: Optional[Lapse] = None,
 ) -> float:
     """Kernel-smoothed bin probabilities: P(bin k) = mean_j [Phi((e_k+1 - rt_j)/h) - Phi((e_k - rt_j)/h)]."""
     total_nll = 0.0
@@ -279,12 +327,15 @@ def _qmp_nll_blocks_smoothed(
 
             rts = block_rts[block_choices == choice_val]
             if len(rts) == 0:
-                pred_prob = np.full(qmp_data.n_bins, eps)
+                pred_prob = np.zeros(qmp_data.n_bins)
             else:
                 # CDF of every simulated RT at every bin edge; edges are [0, q1..q5, inf]
                 cdf = ndtr((target_info["bin_edges"][None, :] - rts[:, None]) / bandwidth)
                 bin_mass = np.diff(cdf, axis=1).sum(axis=0)
-                pred_prob = np.maximum(bin_mass / float(n_sim_per_cond), eps)
+                pred_prob = bin_mass / float(n_sim_per_cond)
+            if lapse is not None:
+                pred_prob = lapse.mix(pred_prob, i, choice_val, target_info["bin_edges"])
+            pred_prob = np.maximum(pred_prob, eps)
             total_nll -= np.sum(target_info["observed_counts"] * np.log(pred_prob))
 
     return float(total_nll)
@@ -297,6 +348,7 @@ def _qmp_nll_blocks_windowed(
     n_sim_per_cond: int,
     eps: float,
     bandwidth: Optional[float],
+    lapse: Optional[Lapse] = None,
 ) -> float:
     """
     Truncation-aware QMP NLL for a dataset built with `window=(rt_lo, rt_hi)`.
@@ -337,7 +389,10 @@ def _qmp_nll_blocks_windowed(
             if info["n_choice"] == 0:
                 continue
             mass = masses.get(choice_val, np.zeros(qmp_data.n_bins))
-            pred_prob = np.maximum(mass / denom, eps)
+            pred_prob = mass / denom
+            if lapse is not None:      # lapse RTs are uniform inside the window, so the mixture stays conditional on it
+                pred_prob = lapse.mix(pred_prob, i, choice_val, info["bin_edges"])
+            pred_prob = np.maximum(pred_prob, eps)
             total_nll -= np.sum(info["observed_counts"] * np.log(pred_prob))
     return float(total_nll)
 

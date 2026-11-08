@@ -10,3 +10,8 @@ __pycache__/
 data/raw/
 .venv/
 .ipynb_checkpoints/
+
+# SLURM job logs (scripts/ada_c1_robust.sbatch)
+logs/
+# smoke-test output of run_c1.py / run_c2.py
+results/*/_smoke/

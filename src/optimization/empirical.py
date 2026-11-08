@@ -20,6 +20,7 @@ from typing import Dict, Iterable, List, Optional, Sequence
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
+from scipy.special import expit
 
 from ..models.simulator import DDMSimulator
 from .fit import fit_ddm
@@ -212,6 +213,7 @@ def simulate_from_fit(
     seed: int = 0,
     dt: float = 0.002,
     rt_min: float = 0.1,
+    prior_col: str = "prior",
 ) -> pd.DataFrame:
     """
     Posterior-predictive §3.1 table: replay a mouse's actual trial covariates (contrast, prior,
@@ -219,21 +221,102 @@ def simulate_from_fit(
     (with the mouse's `bin_edges` from results/empirical/cbf_bin_edges.csv) for the model-vs-data
     CBF overlay, or to the psychometric / chronometric tools. Simulated RTs above `rt_max` are
     dropped (and RTs below `rt_min`, the data's lower cutoff) to mirror the data's exclusion filter.
+
+    `prior_col` is the covariate the model was FITTED with (e.g. 'prior_model', the binned inferred prior);
+    the output's `prior` column is always the true block label, so CBFs stay comparable with the data.
+    If `params` has a lapse rate (`lapse` > 0), that fraction of trials is replaced by lapses (choice Right
+    with probability sigmoid(lapse_side + lapse_prior * prior), RT uniform on [rt_min, rt_max]), as in the
+    fitted likelihood; a fast-guess rate (`guess`) adds responses with RT uniform on [rt_min, rt_min + guess_width]
+    and P(Right) = sigmoid(lapse_side + guess_prior * prior). The `replay` column numbers the `n_rep` copies and
+    `prior_model` holds the covariate the model used.
     """
     sim = DDMSimulator(dt=dt, t_max=rt_max)
+    n = len(trials_df)
+    model_prior = np.tile(trials_df[prior_col].to_numpy(dtype=float), n_rep)
     out = sim.simulate(
         params,
         np.tile(trials_df["contrast"].to_numpy(dtype=float), n_rep),
-        np.tile(trials_df["prior"].to_numpy(dtype=float), n_rep),
+        model_prior,
         np.tile(trials_df["prev_choice"].to_numpy(dtype=float), n_rep),
         model_type=model_type,
         bound_type=bound_type,
         subject_id=str(trials_df["subject_id"].iloc[0]),
         rng=np.random.default_rng(seed),
     )
+    out["prior"] = np.tile(trials_df["prior"].to_numpy(dtype=float), n_rep)
+    out["replay"] = np.repeat(np.arange(n_rep, dtype=np.int32), n)
+    out["prior_model"] = model_prior
+    rate = float(params.get("lapse", 0.0) or 0.0)
+    g_rate = float(params.get("guess", 0.0) or 0.0)
+    if rate > 0.0 or g_rate > 0.0:
+        rng = np.random.default_rng([seed, 7919])
+        u = rng.random(len(out))
+        side = float(params.get("lapse_side", 0.0))
+        hit = u < rate                                    # lapses: RT uniform on the whole window
+        p_right = expit(side + float(params.get("lapse_prior", 0.0)) * model_prior[hit])
+        out.loc[hit, "choice"] = np.where(rng.random(hit.sum()) < p_right, 1, -1).astype(np.int8)
+        out.loc[hit, "rt"] = rng.uniform(rt_min, rt_max, hit.sum())
+        g = (u >= rate) & (u < rate + g_rate)             # fast guesses: RT uniform just above the cutoff
+        if g.any():
+            p_right = expit(side + float(params.get("guess_prior", 0.0)) * model_prior[g])
+            out.loc[g, "choice"] = np.where(rng.random(g.sum()) < p_right, 1, -1).astype(np.int8)
+            out.loc[g, "rt"] = rng.uniform(rt_min, rt_min + float(params.get("guess_width", 0.2)), g.sum())
     out = out[(out["rt"] <= rt_max) & (out["rt"] >= rt_min)].reset_index(drop=True)
     out["trial_idx"] = np.arange(len(out), dtype=np.int32)
     return out
+
+
+def rescore_fits(
+    cohort: pd.DataFrame,
+    fits: pd.DataFrame,
+    n_sim_per_cond: int = 4000,
+    seed: int = 2024,
+    n_jobs: int = -1,
+    cache_path: Optional[str] = None,
+    **overrides,
+) -> pd.DataFrame:
+    """
+    Re-score every finished fit (every replicate seed of every model) with ONE high-precision likelihood
+    evaluation that uses the same `seed` for all of a mouse's fits.
+
+    Why: each fit's own final BIC comes from its own Monte-Carlo seed, so a model difference mixes optimizer
+    differences with simulation noise. With a common seed (common random numbers across models) the simulation
+    noise largely cancels in a difference, and the larger `n_sim_per_cond` shrinks what remains. The original
+    values are kept as `nll_fit` / `bic_fit` / `aic_fit`; `nll` / `bic` / `aic` become the re-scored ones, so the
+    C1 analysis (best replicate, noise floor, tests) uses them unchanged. `overrides` must be the SAME
+    configuration the fits were run with (fit_lapse, param_bounds, fit_history, ...).
+    Cached in `cache_path` (one row per fit; rows already there are reused).
+    """
+    from .fit import score_ddm
+
+    keys = list(RESULT_KEYS) + ["seed"]
+    done = pd.read_csv(cache_path) if cache_path and os.path.exists(cache_path) else pd.DataFrame()
+    have = set(map(tuple, done[keys].astype({"rt_max": float, "seed": int}).values.tolist())) if len(done) else set()
+    cfg = {**EMPIRICAL_FIT_DEFAULTS, **overrides}
+
+    def work(row: Dict[str, object], d: pd.DataFrame) -> Dict[str, object]:
+        kw = {**cfg, "t_max": float(row["rt_max"])}
+        sc = score_ddm(d, fitted_params(row), model_type=row["model"], bound_type=row["bound"],
+                       n_sim_per_cond=n_sim_per_cond, seed=seed, **kw)
+        out = dict(row)
+        for k in ("nll", "bic", "aic"):
+            out[f"{k}_fit"] = row[k]
+            out[k] = sc[k]
+        out["rescore_seed"], out["rescore_n_sim"] = seed, n_sim_per_cond
+        return out
+
+    todo = [r for r in fits.to_dict("records")
+            if (r["subject_id"], r["model"], r["bound"], float(r["rt_max"]), int(r.get("seed", FIT_SEED_DEFAULT))) not in have]
+    rows = done.to_dict("records")
+    if todo:
+        by_mouse = {s: g.reset_index(drop=True) for s, g in cohort.groupby("subject_id", observed=True)}
+        stream = Parallel(n_jobs=n_jobs, verbose=5, return_as="generator_unordered")(
+            delayed(work)(r, by_mouse[r["subject_id"]]) for r in todo)
+        for row in stream:
+            rows.append(row)
+            if cache_path:
+                _atomic_csv(pd.DataFrame(rows), cache_path)
+    return pd.DataFrame(rows)
 
 
 def delta_bic(results: pd.DataFrame, by: str, reference: str, value: str = "bic") -> pd.DataFrame:

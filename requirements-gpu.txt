@@ -1,0 +1,3 @@
+# Optional GPU backend (INCM_BACKEND=cuda): numba-cuda with pip-installed CUDA 12 libraries.
+# Needs an NVIDIA driver >= 525 (check with nvidia-smi). For older drivers use "numba-cuda[cu11]".
+numba-cuda[cu12]>=0.20

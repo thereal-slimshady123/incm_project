@@ -10,10 +10,11 @@ from typing import Dict, List, Tuple, Any, Optional, Sequence
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
+from scipy.special import expit
 from scipy.stats import qmc
 
 from ..models.simulator import DDMSimulator
-from .qmp import QMPDataset, compute_qmp_nll_blocks, compute_bic, compute_aic
+from .qmp import Lapse, QMPDataset, compute_qmp_nll_blocks, compute_bic, compute_aic
 
 
 # Parameter boundaries and default initial guesses
@@ -40,6 +41,15 @@ PARAM_SPECS = {
     # Trial-to-trial variabilities (plan §4, Week 1 / Week 3 C2)
     "s_v": {"init": 0.5, "bounds": (0.0, 3.0), "desc": "Drift-rate variability (SD)"},
     "s_z": {"init": 0.15, "bounds": (0.0, 0.6), "desc": "Starting-point variability (range as fraction of a)"},
+    # Lapse / contaminant mixture (C1 robust variant): rate, and the logit of P(Right | lapse) = side + prior term
+    "lapse": {"init": 0.05, "bounds": (0.0, 0.3), "desc": "Lapse / contaminant rate"},
+    "lapse_side": {"init": 0.0, "bounds": (-4.0, 4.0), "desc": "Lapse side bias (logit of P(Right | lapse))"},
+    "lapse_prior": {"init": 0.5, "bounds": (-4.0, 4.0), "desc": "Block-prior effect on lapse choices (logit units)"},
+    # Fast-guess (anticipatory) component: RT uniform on [RT cutoff, cutoff + guess_width], choice biased by the prior;
+    # its side bias is shared with the lapses (lapse_side)
+    "guess": {"init": 0.03, "bounds": (0.0, 0.3), "desc": "Fast-guess rate"},
+    "guess_width": {"init": 0.2, "bounds": (0.05, 0.6), "desc": "Fast-guess RT window above the cutoff (s)"},
+    "guess_prior": {"init": 1.0, "bounds": (-4.0, 4.0), "desc": "Block-prior effect on fast-guess choices (logit units)"},
 }
 
 # Build initial simplex with physiologically scaled step sizes
@@ -60,7 +70,15 @@ SIMPLEX_STEPS = {
     "z_0": 0.2,
     "s_v": 0.4,
     "s_z": 0.12,
+    "lapse": 0.04,
+    "lapse_side": 0.8,
+    "lapse_prior": 0.8,
+    "guess": 0.03,
+    "guess_width": 0.1,
+    "guess_prior": 0.8,
 }
+
+LAPSE_RT_MIN = 0.1     # lower edge of the uniform lapse RT distribution (= the data's RT_MIN) when no rt_window is set
 
 # tau_b is not identifiable jointly with b_max (pilot recovery: r ~ 0), so M3 fits
 # b_max with tau_b fixed at each grid value and keeps the best (plan §6 contingency)
@@ -91,6 +109,8 @@ class DDMFitter:
         bias_type: Optional[str] = None,
         param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
         rt_window: Optional[Tuple[float, float]] = None,
+        fit_lapse: bool = False,
+        fit_guess: bool = False,
     ):
         """
         Parameters
@@ -143,6 +163,15 @@ class DDMFitter:
             Truncation-aware likelihood (see `QMPDataset`): the data were filtered to this RT window, so
             the model is scored on its RT distribution conditional on the window. None (default) = the
             original behaviour used for C1, where mass beyond the cutoff falls into the last QMP bin.
+        fit_lapse : bool
+            Add a lapse / contaminant mixture (`qmp.Lapse`): rate `lapse`, and P(Right | lapse) =
+            sigmoid(lapse_side + lapse_prior * prior), RT uniform on the data window. Shared by every model,
+            so it cannot favour one prior mechanism; it absorbs the block-dependent high-contrast errors and the
+            fast-guess / slow-disengaged responses that the pure DDM cannot produce.
+        fit_guess : bool
+            Add a fast-guess (anticipatory) component on top of the lapse (requires fit_lapse): rate `guess`, RT
+            uniform on [cutoff, cutoff + guess_width], P(Right | guess) = sigmoid(lapse_side + guess_prior * prior).
+            Tests whether prior-driven anticipations explain the steeply falling empirical CBF.
         """
         self.model_type = model_type.upper()
         self.bound_type = bound_type.lower()
@@ -162,6 +191,10 @@ class DDMFitter:
         if bias_type not in (None, "drift", "start", "both"):
             raise ValueError("bias_type must be None, 'drift', 'start' or 'both'")
         self.bias_type = bias_type
+        self.fit_lapse = bool(fit_lapse)
+        self.fit_guess = bool(fit_guess)
+        if self.fit_guess and not self.fit_lapse:
+            raise ValueError("fit_guess requires fit_lapse (the guess shares lapse_side)")
         self.bounds_map = {p: tuple(PARAM_SPECS[p]["bounds"]) for p in PARAM_SPECS}
         for name, (lo, hi) in (param_bounds or {}).items():
             if name not in PARAM_SPECS or not lo < hi:
@@ -202,6 +235,11 @@ class DDMFitter:
 
         if self.fit_variability:
             names.extend(["s_v", "s_z"])
+
+        if self.fit_lapse:
+            names.extend(["lapse", "lapse_side", "lapse_prior"])
+        if self.fit_guess:
+            names.extend(["guess", "guess_width", "guess_prior"])
 
         return names
 
@@ -259,10 +297,29 @@ class DDMFitter:
         prev = np.repeat([c.get("prev_choice", 0.0) for c in conds], n_per_cond).astype(np.float64)
         return contrasts, priors, prev
 
+    def _lapse(self, params: Dict[str, float], qmp_data: QMPDataset) -> Optional[Lapse]:
+        if not self.fit_lapse and "lapse" not in self.fixed_params:
+            return None
+        rate = float(params.get("lapse", 0.0))
+        g_rate = float(params.get("guess", 0.0)) if (self.fit_guess or "guess" in self.fixed_params) else 0.0
+        if rate <= 0.0 and g_rate <= 0.0:
+            return None
+        priors = np.array([c["prior"] for c in qmp_data.conditions], dtype=float)
+        side = float(params.get("lapse_side", 0.0))
+        p_right = expit(side + float(params.get("lapse_prior", 0.0)) * priors)
+        rt_range = self.rt_window if self.rt_window is not None else (LAPSE_RT_MIN, self.t_max)
+        extra = None
+        if g_rate > 0.0:
+            lo = rt_range[0]
+            extra = [(g_rate, expit(side + float(params.get("guess_prior", 0.0)) * priors),
+                      (lo, lo + float(params.get("guess_width", 0.2))))]
+        return Lapse(max(rate, 0.0), p_right, rt_range, extra=extra)
+
     def _qmp_nll(self, x_free: np.ndarray, qmp_data: QMPDataset, template, n_per_cond: int, seed: int) -> float:
         contrasts, priors, prev = template
+        params = self._unpack_params(x_free)
         sim_df = self.simulator.simulate(
-            params=self._unpack_params(x_free),
+            params=params,
             contrasts=contrasts,
             priors=priors,
             prev_choices=prev,
@@ -272,8 +329,28 @@ class DDMFitter:
         )
         return compute_qmp_nll_blocks(
             sim_df["choice"].to_numpy(), sim_df["rt"].to_numpy(), qmp_data, n_per_cond,
-            bandwidth=self.rt_bandwidth,
+            bandwidth=self.rt_bandwidth, lapse=self._lapse(params, qmp_data),
         )
+
+    def _dataset(self, trials_df: pd.DataFrame) -> QMPDataset:
+        # Condition on previous choice whenever v_h is fitted, so it is identifiable
+        group_cols = ("contrast", "prior", "prev_choice") if self.fit_history else ("contrast", "prior")
+        qmp_kwargs = {"quantiles": self.quantiles} if self.quantiles is not None else {}
+        return QMPDataset(trials_df, group_cols=group_cols, window=self.rt_window, **qmp_kwargs)
+
+    def score(self, trials_df: pd.DataFrame, params: Dict[str, float], n_sim_per_cond: int, seed: int) -> Dict[str, float]:
+        """
+        NLL / BIC of FIXED parameters (no optimisation), with `n_sim_per_cond` simulations from `seed`.
+
+        Used to re-score finished fits: scoring every replicate of every model of a mouse with the SAME seed
+        gives common random numbers across models, so the Monte-Carlo part of a model difference cancels.
+        """
+        qmp_data = self._dataset(trials_df)
+        x = self._clip_to_bounds(self._pack_params(params))
+        template = self._simulation_template(qmp_data, n_sim_per_cond)
+        nll = self._qmp_nll(x, qmp_data, template, n_sim_per_cond, seed)
+        return {"nll": float(nll), "bic": float(compute_bic(nll, self.n_params, qmp_data.total_trials)),
+                "aic": float(compute_aic(nll, self.n_params))}
 
     def fit(
         self,
@@ -320,10 +397,7 @@ class DDMFitter:
             Results dictionary conforming to §3.2 Model API:
             {'params': dict, 'nll': float, 'bic': float, 'aic': float, 'success': bool, 'nit': int}
         """
-        # Condition on previous choice whenever v_h is fitted, so it is identifiable
-        group_cols = ("contrast", "prior", "prev_choice") if self.fit_history else ("contrast", "prior")
-        qmp_kwargs = {"quantiles": self.quantiles} if self.quantiles is not None else {}
-        qmp_data = QMPDataset(trials_df, group_cols=group_cols, window=self.rt_window, **qmp_kwargs)
+        qmp_data = self._dataset(trials_df)
         n_total = float(qmp_data.total_trials)
         template = self._simulation_template(qmp_data, self.n_sim_per_cond)
         n_fev = [0]
@@ -422,6 +496,8 @@ def fit_ddm(
     bias_type: Optional[str] = None,
     param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
     rt_window: Optional[Tuple[float, float]] = None,
+    fit_lapse: bool = False,
+    fit_guess: bool = False,
 ) -> Dict[str, Any]:
     """
     Standard top-level functional API adhering to §3.2 Model API specification.
@@ -458,6 +534,8 @@ def fit_ddm(
             bias_type=bias_type,
             param_bounds=param_bounds,
             rt_window=rt_window,
+            fit_lapse=fit_lapse,
+            fit_guess=fit_guess,
         )
 
     fit_kwargs = dict(
@@ -475,3 +553,42 @@ def fit_ddm(
         return best
 
     return make_fitter().fit(trials_df, **fit_kwargs)
+
+
+def score_ddm(
+    trials_df: pd.DataFrame,
+    params: Dict[str, float],
+    model_type: str = "M2",
+    bound_type: str = "fixed",
+    n_sim_per_cond: int = 4000,
+    seed: int = 2024,
+    fit_history: bool = True,
+    rt_bandwidth: Optional[float] = 0.01,
+    t_max: float = 2.5,
+    dt: float = 0.002,
+    fit_beta: bool = False,
+    fit_variability: bool = False,
+    quantiles: Optional[Sequence[float]] = None,
+    bias_type: Optional[str] = None,
+    rt_window: Optional[Tuple[float, float]] = None,
+    fit_lapse: bool = False,
+    fit_guess: bool = False,
+    param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+    **_ignored,
+) -> Dict[str, float]:
+    """
+    Re-score FIXED parameters (e.g. a finished fit) with the same likelihood configuration as `fit_ddm`.
+
+    Takes the same configuration keywords as `fit_ddm` (search-only keywords such as n_screen are ignored), so
+    a fit's overrides can be passed straight through. M3 counts tau_b as a parameter, as in `fit_ddm`.
+    Scoring all models of one mouse with the same `seed` uses common random numbers across models.
+    """
+    m3 = model_type.upper() == "M3"
+    fitter = DDMFitter(
+        model_type=model_type, bound_type=bound_type, fit_history=fit_history, n_sim_per_cond=n_sim_per_cond,
+        dt=dt, t_max=t_max, crn_seed=seed, fixed_params={"tau_b": float(params["tau_b"])} if m3 else None,
+        n_extra_params=1 if m3 else 0, rt_bandwidth=rt_bandwidth, fit_beta=fit_beta,
+        fit_variability=fit_variability, quantiles=quantiles, bias_type=bias_type, rt_window=rt_window,
+        fit_lapse=fit_lapse, fit_guess=fit_guess, param_bounds=param_bounds,
+    )
+    return fitter.score(trials_df, params, n_sim_per_cond, seed)
